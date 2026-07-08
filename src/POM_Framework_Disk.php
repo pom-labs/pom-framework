@@ -537,6 +537,7 @@ HTACCESS;
      * Writes the literal value to a file.
      *
      * Empty editor values remove the previous managed file so a later settings render cannot restore stale content.
+     * Identical content keeps the current file in place so filemtime-based asset versions only change after real edits.
      *
      * @param $file_name
      * @param $content
@@ -566,9 +567,20 @@ HTACCESS;
             return '';
         }
 
-        self::write_file($settings_path . $filename, $content, LOCK_EX);
+        $path = $settings_path . $filename;
+        $content = (string) $content;
 
-        return $settings_path . $filename;
+        if (is_file($path)) {
+            $existing_content = file_get_contents($path);
+
+            if (is_string($existing_content) && $existing_content === $content) {
+                return $path;
+            }
+        }
+
+        self::write_file($path, $content, LOCK_EX);
+
+        return $path;
     }
 
     /**

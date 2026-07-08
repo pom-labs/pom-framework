@@ -4,6 +4,16 @@
 
 jQuery(function($) {
 
+  if (
+    typeof settings === 'undefined' ||
+    !settings.codeMirrorSettings ||
+    typeof wp === 'undefined' ||
+    !wp.codeEditor ||
+    typeof wp.codeEditor.initialize !== 'function'
+  ) {
+    return;
+  }
+
   const getCodeMirrorSettings = function(mode) {
     const codeMirrorSettings = $.extend(true, {}, settings.codeMirrorSettings);
 

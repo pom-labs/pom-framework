@@ -353,6 +353,7 @@ class Settings_Importer {
     }
 
     private function is_allowed_file(string $file_name): bool {
-        return $this->allowed_files === null || isset($this->allowed_files[$file_name]);
+        return Settings_Transfer_Helper::is_transferable_settings_file($file_name)
+            && ($this->allowed_files === null || isset($this->allowed_files[$file_name]));
     }
 }

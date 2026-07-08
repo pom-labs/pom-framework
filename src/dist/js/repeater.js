@@ -644,14 +644,27 @@ jQuery(function($) {
     /**
      * If the repeater has code fields replace their id's in order to render Codemirror with unique IDs.
      */
-    let $code_editor = $clone.find('.pom-framework-code-editor-html, .pom-framework-code-editor-js, .pom-framework-code-editor-css');
+    let $code_editor = $clone.find('.pom-framework-code-editor-html, .pom-framework-code-editor-js, .pom-framework-code-editor-css, .pom-framework-code-editor-json');
     for (let $i = 0; $i < $code_editor.length; $i++) {
       $code_editor[$i].id = $generate_random_string(10, false);
+      let $cloned_editor = $($code_editor[$i]);
 
-      // Delete existing code mirror instance
-      $($code_editor).next().remove();
+      // Remove cloned editor markup so the textarea remains usable without CodeMirror.
+      $cloned_editor.next('.CodeMirror').remove();
+      $cloned_editor.removeClass('codemirror-rendered').show();
+
+      if (
+        typeof settings === 'undefined' ||
+        !settings.codeMirrorSettings ||
+        typeof wp === 'undefined' ||
+        !wp.codeEditor ||
+        typeof wp.codeEditor.initialize !== 'function'
+      ) {
+        continue;
+      }
 
       wp.codeEditor.initialize($code_editor[$i], settings.codeMirrorSettings);
+      $cloned_editor.addClass('codemirror-rendered');
     }
 
     /**

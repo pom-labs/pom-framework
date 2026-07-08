@@ -39,18 +39,7 @@ class Code_HTML {
 
         echo '</div>';
 
-        $codemirror_settings = wp_enqueue_code_editor([]);
-        wp_enqueue_script('wp-theme-plugin-editor');
-        wp_enqueue_style('wp-codemirror');
-        wp_enqueue_style('pom-framework-code-style', POM_FRAMEWORK_SRC_URI . '/dist/css/code.min.css', ['wp-codemirror']);
-        wp_enqueue_script('pom-framework-code', POM_FRAMEWORK_SRC_URI . '/dist/js/code' . POM_FRAMEWORK_MIN . '.js', ['jquery', 'wp-theme-plugin-editor'], null, true);
-        wp_localize_script(
-            'pom-framework-code',
-            'settings',
-            [
-                'codeMirrorSettings' => $codemirror_settings
-            ]
-        );
+        POM_Framework_Helper::enqueue_code_editor_assets();
     }
 
 }

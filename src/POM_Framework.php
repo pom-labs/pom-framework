@@ -117,19 +117,7 @@ class POM_Framework {
         if ($field_args['type'] === 'repeater' && !empty($field_args['fields'])) {
             foreach ($field_args['fields'] as $repeater_field) {
                 if (isset($repeater_field['type']) && ($repeater_field['type'] === 'code_html' || $repeater_field['type'] === 'code_css' || $repeater_field['type'] === 'code_js' || $repeater_field['type'] === 'code_json')) {
-                    $codemirror_settings = wp_enqueue_code_editor([]);
-
-                    wp_enqueue_script('wp-theme-plugin-editor');
-                    wp_enqueue_style('wp-codemirror');
-                    wp_enqueue_style('pom-framework-code-style', POM_FRAMEWORK_SRC_URI . '/dist/css/code.min.css', ['wp-codemirror']);
-                    wp_enqueue_script('pom-framework-code', POM_FRAMEWORK_SRC_URI . '/dist/js/code' . POM_FRAMEWORK_MIN . '.js', ['jquery', 'wp-theme-plugin-editor'], null, true);
-                    wp_localize_script(
-                        'pom-framework-code',
-                        'settings',
-                        [
-                            'codeMirrorSettings' => $codemirror_settings
-                        ]
-                    );
+                    POM_Framework_Helper::enqueue_code_editor_assets();
                 }
 
                 if (isset($repeater_field['type']) && $repeater_field['type'] === 'Select') {

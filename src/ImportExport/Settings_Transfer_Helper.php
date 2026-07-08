@@ -5,6 +5,20 @@ namespace POMFramework\ImportExport;
 use POMFramework\POM_Framework_Disk;
 
 class Settings_Transfer_Helper {
+    private const NON_TRANSFERABLE_SETTINGS_FILES = [
+        'fields_save_as.php',
+    ];
+
+    /**
+     * Internal storage metadata is not a standalone settings payload.
+     *
+     * Why: transferring this map without also transferring its external option or
+     * theme-mod values is incomplete and can change how unrelated fields are read.
+     */
+    public static function is_transferable_settings_file(string $file_name): bool {
+        return !in_array($file_name, self::NON_TRANSFERABLE_SETTINGS_FILES, true);
+    }
+
     /**
      * Normalize an optional settings-file allowlist used to constrain a transfer.
      *
@@ -21,7 +35,11 @@ class Settings_Transfer_Helper {
         foreach ($file_names as $file_name) {
             $file_name = sanitize_file_name((string) $file_name);
 
-            if ($file_name === '' || !str_ends_with($file_name, '.php')) {
+            if (
+                $file_name === ''
+                || !str_ends_with($file_name, '.php')
+                || !self::is_transferable_settings_file($file_name)
+            ) {
                 continue;
             }
 

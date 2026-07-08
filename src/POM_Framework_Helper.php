@@ -37,6 +37,46 @@ class POM_Framework_Helper {
     }
 
     /**
+     * Enqueue the WordPress code editor and the POM Framework initializer.
+     *
+     * Why: wp_enqueue_code_editor() returns false when syntax highlighting is
+     * disabled for the current user. Loading the initializer in that state
+     * would call an undefined wp.codeEditor API instead of leaving a usable
+     * plain textarea.
+     *
+     * @return bool Whether the code editor assets were enqueued.
+     */
+    public static function enqueue_code_editor_assets(): bool {
+        $codemirror_settings = wp_enqueue_code_editor([]);
+
+        if (!is_array($codemirror_settings) || empty($codemirror_settings['codemirror'])) {
+            return false;
+        }
+
+        wp_enqueue_style(
+            'pom-framework-code-style',
+            POM_FRAMEWORK_SRC_URI . '/dist/css/code.min.css',
+            ['code-editor']
+        );
+        wp_enqueue_script(
+            'pom-framework-code',
+            POM_FRAMEWORK_SRC_URI . '/dist/js/code' . POM_FRAMEWORK_MIN . '.js',
+            ['jquery', 'code-editor'],
+            null,
+            true
+        );
+        wp_localize_script(
+            'pom-framework-code',
+            'settings',
+            [
+                'codeMirrorSettings' => $codemirror_settings,
+            ]
+        );
+
+        return true;
+    }
+
+    /**
      * Determine whether a field should be persisted between requests.
      *
      * Why: some fields only expose transient admin UI state, such as the
