@@ -6,17 +6,17 @@ use RuntimeException;
 
 class Settings_Tools_Page {
     private const FLASH_OPTION = 'pom_settings_tools_flash_messages';
-    private static bool $bootstrapped = false;
+    private static array $bootstrapped_pages = [];
 
     private string $page_slug;
     private Settings_Exporter $exporter;
     private Settings_Importer $importer;
     private array $messages = [];
 
-    public function __construct(string $page_slug) {
+    public function __construct(string $page_slug, ?array $allowed_files = null) {
         $this->page_slug = $page_slug;
-        $this->exporter = new Settings_Exporter($page_slug);
-        $this->importer = new Settings_Importer($page_slug);
+        $this->exporter = new Settings_Exporter($page_slug, $allowed_files);
+        $this->importer = new Settings_Importer($page_slug, $allowed_files);
     }
 
     public static function enqueue_assets(): void {
@@ -33,12 +33,12 @@ class Settings_Tools_Page {
         wp_add_inline_style('pom-settings-tools', $css);
     }
 
-    public static function bootstrap(string $page_slug): void {
-        if (self::$bootstrapped) {
+    public static function bootstrap(string $page_slug, ?array $allowed_files = null): void {
+        if (isset(self::$bootstrapped_pages[$page_slug])) {
             return;
         }
 
-        add_action('admin_init', function () use ($page_slug) {
+        add_action('admin_init', function () use ($page_slug, $allowed_files) {
             if (empty($_POST['pom_settings_tools_action']) || $_POST['pom_settings_tools_action'] !== 'export_settings') {
                 return;
             }
@@ -49,11 +49,11 @@ class Settings_Tools_Page {
                 return;
             }
 
-            $instance = new self($page_slug);
+            $instance = new self($page_slug, $allowed_files);
             $instance->handle_export(true);
         });
 
-        self::$bootstrapped = true;
+        self::$bootstrapped_pages[$page_slug] = true;
     }
 
     public function render(): void {
@@ -69,6 +69,7 @@ class Settings_Tools_Page {
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Settings transfer', 'pom') . '</h1>'; // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+        echo '<p>' . esc_html__('Only the listed POM Framework settings files and their managed assets are transferred.', 'pom') . '</p>'; // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
         $this->render_messages();
         echo '<div class="pom-settings-tools-grid">';
         $this->render_export_card($available_settings);

@@ -5,6 +5,32 @@ namespace POMFramework\ImportExport;
 use POMFramework\POM_Framework_Disk;
 
 class Settings_Transfer_Helper {
+    /**
+     * Normalize an optional settings-file allowlist used to constrain a transfer.
+     *
+     * Why: consumers can expose import/export beside legacy settings systems, so the
+     * transfer boundary must be explicit rather than trusting submitted filenames.
+     */
+    public static function normalize_settings_file_allowlist(?array $file_names): ?array {
+        if ($file_names === null) {
+            return null;
+        }
+
+        $normalized = [];
+
+        foreach ($file_names as $file_name) {
+            $file_name = sanitize_file_name((string) $file_name);
+
+            if ($file_name === '' || !str_ends_with($file_name, '.php')) {
+                continue;
+            }
+
+            $normalized[$file_name] = true;
+        }
+
+        return $normalized;
+    }
+
     public static function normalize_path(string $path): string {
         return wp_normalize_path($path);
     }
@@ -79,14 +105,14 @@ class Settings_Transfer_Helper {
         $normalized_candidate = self::normalize_path($candidate);
 
         if (strpos($normalized_candidate, $normalized_base) === 0) {
-            return ltrim(substr($normalized_candidate, strlen($normalized_base)), '/');
+            return self::sanitize_relative_path(ltrim(substr($normalized_candidate, strlen($normalized_base)), '/'));
         }
 
         $candidate_without_leading_slash = ltrim($normalized_candidate, '/');
         $absolute_candidate = $normalized_base . $candidate_without_leading_slash;
 
         if (file_exists($absolute_candidate)) {
-            return $candidate_without_leading_slash;
+            return self::sanitize_relative_path($candidate_without_leading_slash);
         }
 
         return null;

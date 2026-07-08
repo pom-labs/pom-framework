@@ -9,10 +9,12 @@ use ZipArchive;
 class Settings_Exporter {
     private string $page_slug;
     private string $base_path;
+    private ?array $allowed_files;
 
-    public function __construct(string $page_slug) {
+    public function __construct(string $page_slug, ?array $allowed_files = null) {
         $this->page_slug = $page_slug;
         $this->base_path = Settings_Transfer_Helper::get_settings_base_path($page_slug);
+        $this->allowed_files = Settings_Transfer_Helper::normalize_settings_file_allowlist($allowed_files);
     }
 
     public function get_available_settings(): array {
@@ -26,6 +28,11 @@ class Settings_Exporter {
 
         foreach ($files as $file) {
             $file_name = basename($file);
+
+            if (!$this->is_allowed_file($file_name)) {
+                continue;
+            }
+
             $settings[$file_name] = Settings_Transfer_Helper::humanize_setting_label($file_name);
         }
 
@@ -64,6 +71,11 @@ class Settings_Exporter {
         $notices = [];
 
         foreach ($selected_files as $file_name) {
+            if (!$this->is_allowed_file($file_name)) {
+                $notices[] = sprintf(__('Skipped settings file outside the allowed transfer scope: %s', 'pom'), esc_html($file_name)); // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+                continue;
+            }
+
             $full_path = $this->base_path . $file_name;
 
             if (!is_file($full_path)) {
@@ -110,6 +122,16 @@ class Settings_Exporter {
             ];
         }
 
+        if (empty($manifest_settings)) {
+            $zip->close();
+
+            if (is_file($zip_path)) {
+                unlink($zip_path);
+            }
+
+            throw new RuntimeException(__('No valid settings files were available to export.', 'pom')); // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+        }
+
         $source_domain = $source_domain ?: Domain_Replacer::normalize_domain(get_site_url());
 
         $manifest = [
@@ -137,5 +159,9 @@ class Settings_Exporter {
         $timestamp = gmdate('Ymd-His');
 
         return sprintf('%s-settings-%s.zip', $domain ?: 'site', $timestamp);
+    }
+
+    private function is_allowed_file(string $file_name): bool {
+        return $this->allowed_files === null || isset($this->allowed_files[$file_name]);
     }
 }

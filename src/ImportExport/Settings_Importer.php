@@ -10,11 +10,13 @@ class Settings_Importer {
     private string $page_slug;
     private string $base_path;
     private string $transient_key;
+    private ?array $allowed_files;
 
-    public function __construct(string $page_slug) {
+    public function __construct(string $page_slug, ?array $allowed_files = null) {
         $this->page_slug = $page_slug;
         $this->base_path = Settings_Transfer_Helper::get_settings_base_path($page_slug);
-        $this->transient_key = 'pom_settings_import_preview_' . get_current_user_id();
+        $this->transient_key = 'pom_settings_import_preview_' . get_current_user_id() . '_' . md5($page_slug);
+        $this->allowed_files = Settings_Transfer_Helper::normalize_settings_file_allowlist($allowed_files);
     }
 
     /**
@@ -92,6 +94,11 @@ class Settings_Importer {
         $copied_assets = [];
 
         foreach ($selected_files as $file_name) {
+            if (!$this->is_allowed_file($file_name)) {
+                $notices[] = sprintf(__('Skipping settings file outside the allowed transfer scope: %s', 'pom'), esc_html($file_name)); // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+                continue;
+            }
+
             $manifest_entry = $this->find_manifest_entry($manifest, $file_name);
 
             if ($manifest_entry === null) {
@@ -113,7 +120,14 @@ class Settings_Importer {
                 continue;
             }
 
-            $settings_array = Settings_Transfer_Helper::update_asset_paths($settings_array, $manifest_entry['assets'] ?? [], $source_base, $this->base_path);
+            $assets = $manifest_entry['assets'] ?? [];
+
+            if (!$this->copy_assets($preview, $assets, $source_domain, $destination_domain, $copied_assets)) {
+                $notices[] = sprintf(__('Settings file skipped because one or more managed assets could not be restored: %s', 'pom'), esc_html($file_name)); // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+                continue;
+            }
+
+            $settings_array = Settings_Transfer_Helper::update_asset_paths($settings_array, $assets, $source_base, $this->base_path);
             $settings_array = Domain_Replacer::replace_in_array($settings_array, $source_domain, $destination_domain);
 
             $disk = new POM_Framework_Disk();
@@ -125,13 +139,14 @@ class Settings_Importer {
                 continue;
             }
 
-            POM_Framework_Disk::write_file($destination_file, $file_content, LOCK_EX);
+            if (POM_Framework_Disk::write_file($destination_file, $file_content, LOCK_EX) === false) {
+                $notices[] = sprintf(__('Settings file could not be written: %s', 'pom'), esc_html($file_name)); // phpcs:ignore WordPress.WP.I18n.TextDomainMismatch
+                continue;
+            }
 
             if (function_exists('opcache_invalidate')) {
                 @opcache_invalidate($destination_file, true); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
             }
-
-            $this->copy_assets($preview, $manifest_entry['assets'] ?? [], $source_domain, $destination_domain, $copied_assets);
 
             $imported[] = $manifest_entry['file'];
         }
@@ -222,11 +237,14 @@ class Settings_Importer {
         return $path;
     }
 
-    private function copy_assets(array $preview, array $assets, string $source_domain, string $destination_domain, array &$copied_assets): void {
+    private function copy_assets(array $preview, array $assets, string $source_domain, string $destination_domain, array &$copied_assets): bool {
+        $all_copied = true;
+
         foreach ($assets as $asset_relative) {
             $clean_relative = Settings_Transfer_Helper::sanitize_relative_path((string) $asset_relative);
 
             if ($clean_relative === null) {
+                $all_copied = false;
                 continue;
             }
 
@@ -238,23 +256,35 @@ class Settings_Importer {
             $destination_file = $this->base_path . $clean_relative;
 
             if (!is_file($source_file) || !Settings_Transfer_Helper::is_path_inside_directory($destination_file, $this->base_path)) {
+                $all_copied = false;
                 continue;
             }
 
-            wp_mkdir_p(dirname($destination_file));
+            if (!wp_mkdir_p(dirname($destination_file)) && !is_dir(dirname($destination_file))) {
+                $all_copied = false;
+                continue;
+            }
+
             POM_Framework_Disk::apply_directory_permissions(dirname($destination_file));
 
             $contents = file_get_contents($source_file);
 
             if ($contents === false) {
+                $all_copied = false;
                 continue;
             }
 
             $contents = Domain_Replacer::replace_in_string($contents, $source_domain, $destination_domain);
 
-            POM_Framework_Disk::write_file($destination_file, $contents, LOCK_EX);
+            if (POM_Framework_Disk::write_file($destination_file, $contents, LOCK_EX) === false) {
+                $all_copied = false;
+                continue;
+            }
+
             $copied_assets[$clean_relative] = true;
         }
+
+        return $all_copied;
     }
 
     private function sanitize_manifest(array $manifest): ?array {
@@ -274,6 +304,10 @@ class Settings_Importer {
 
             if ($file === '' || $file !== ($entry['file'] ?? '') || !str_ends_with($file, '.php')) {
                 return null;
+            }
+
+            if (!$this->is_allowed_file($file)) {
+                continue;
             }
 
             if ($json === null || !str_starts_with($json, 'settings/') || !str_ends_with($json, '.json')) {
@@ -316,5 +350,9 @@ class Settings_Importer {
         if (!empty($preview['zip_path']) && file_exists($preview['zip_path'])) {
             unlink($preview['zip_path']);
         }
+    }
+
+    private function is_allowed_file(string $file_name): bool {
+        return $this->allowed_files === null || isset($this->allowed_files[$file_name]);
     }
 }
