@@ -124,6 +124,7 @@ class License_Registry {
 
 		$registry[ $product_slug ]['last_validation'] = array(
 			'valid'            => ! empty( $result['valid'] ),
+			'multisite_allowed' => ! empty( $result['multisite_allowed'] ),
 			'license_status'   => isset( $result['license_status'] ) ? (string) $result['license_status'] : null,
 			'plan'             => isset( $result['plan']['slug'] ) ? (string) $result['plan']['slug'] : null,
 			'expires_at'       => isset( $result['expires_at'] ) ? (string) $result['expires_at'] : null,

@@ -13,7 +13,10 @@ namespace POMFramework\Licensing;
 class License_Field {
 
 	/**
-	 * Register the shared admin-post handlers once.
+	 * Register the shared admin-post handler once.
+	 *
+	 * Product adapters must call this on every admin request (the license
+	 * form posts to admin-post.php, which never fires settings page hooks).
 	 */
 	public static function boot(): void {
 		static $booted = false;
@@ -25,6 +28,54 @@ class License_Field {
 		$booted = true;
 
 		add_action( 'admin_post_pom_license_field_action', array( __CLASS__, 'handle_action' ) );
+	}
+
+	/**
+	 * A complete "License" section for a POM Framework settings definition.
+	 *
+	 * Usage from a product adapter:
+	 *   $settings['license'] = License_Field::settings_section( 'pom-cache', 'POM Cache' );
+	 *
+	 * The section renders at .../options-general.php?page=<page>&section=license.
+	 *
+	 * @param array<string, mixed> $args Extra render() args (description, redirect).
+	 * @return array<string, mixed>
+	 */
+	public static function settings_section( string $product_slug, string $product_label, array $args = array() ): array {
+		return array(
+			'title'         => __( 'License', 'pom-framework' ),
+			'allowed_roles' => array( 'administrator' ),
+			'tab'           => array(
+				'license' => self::settings_tab( $product_slug, $product_label, $args ),
+			),
+		);
+	}
+
+	/**
+	 * A single license tab for an existing settings section (e.g. the POM
+	 * Events tab inside the theme options Events section).
+	 *
+	 * @param array<string, mixed> $args Extra render() args.
+	 * @return array<string, mixed>
+	 */
+	public static function settings_tab( string $product_slug, string $product_label, array $args = array() ): array {
+		return array(
+			'title'           => sprintf( '%s license', $product_label ),
+			'description'     => '',
+			'settings'        => array(),
+			'render_callback' => static function () use ( $product_slug, $product_label, $args ): void {
+				$defaults = array(
+					'title'       => sprintf( '%s license', $product_label ),
+					'description' => sprintf(
+						/* translators: %s: product name. */
+						__( 'Paste the %s license key from account.pom.es (My Account > Licenses & Downloads). The license authorizes this domain, private downloads, and automatic updates.', 'pom-framework' ),
+						$product_label
+					),
+				);
+
+				self::render( $product_slug, array_merge( $defaults, $args ) );
+			},
+		);
 	}
 
 	/**

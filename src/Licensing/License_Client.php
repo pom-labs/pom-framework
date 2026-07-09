@@ -36,6 +36,7 @@ class License_Client {
 			'site_url'     => home_url( '/' ),
 			'network_url'  => $home,
 			'network_uuid' => License_Registry::ensure_network_uuid(),
+			'multisite'    => is_multisite() ? '1' : '0',
 			'environment'  => self::detect_environment(),
 			'wp_version'   => get_bloginfo( 'version' ),
 			'php_version'  => PHP_VERSION,

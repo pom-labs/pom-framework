@@ -520,6 +520,19 @@ class POM_Framework_Settings {
             return;
         }
 
+        /**
+         * A subsection can delegate its whole content to a callable instead of
+         * the standard settings form (used by the shared license tab, and
+         * available to any custom subsection).
+         */
+        $render_callback = $settings_array[$current_tab]['tab'][$current_subsection]['render_callback'] ?? null;
+
+        if (is_callable($render_callback)) {
+            call_user_func($render_callback, $page_slug, $current_tab, $current_subsection);
+
+            return;
+        }
+
         $action_url = add_query_arg(
             [
                 'page' => $page_slug,

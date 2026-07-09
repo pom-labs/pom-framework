@@ -49,6 +49,13 @@ Key advantages at a glance:
   - [Handling callbacks after saving](#handling-callbacks-after-saving)
   - [Loading tweak definitions](#loading-tweak-definitions)
   - [Retrieving saved values](#retrieving-saved-values)
+- [Product licensing client](#product-licensing-client)
+  - [License_Registry](#license_registry)
+  - [License_Client](#license_client)
+  - [License_Field and the License settings tab](#license_field-and-the-license-settings-tab)
+  - [License_Notices](#license_notices)
+  - [Custom subsection rendering with render_callback](#custom-subsection-rendering-with-render_callback)
+  - [Writing a product license adapter](#writing-a-product-license-adapter)
 - [Additional resources](#additional-resources)
 
 ## Quick start
@@ -719,6 +726,87 @@ $webhook = POM_Framework_Settings::get_setting_value('your-plugin', 'general', '
 ```
 
 By mirroring the input type you ensure the runtime value has been filtered by the same logic that protects the form submission, guarding against manual edits or tampering in `wp-content/settings/`.
+
+## Product licensing client
+
+`src/Licensing/` (namespace `POMFramework\Licensing`) is the shared client for the POM product licensing platform served by account.pom.es (`pom-lic/v2`). Product plugins and themes consume it through thin adapters and must not duplicate storage, HTTP, caching, or UI code.
+
+### License_Registry
+
+One registry option `pom_product_licenses` keyed by canonical product slug:
+
+- Single site: non-autoloaded option. Multisite: network option, so the common POM Standard updater can read every product key while target plugins are inactive. One product license applies to one WordPress network.
+- Each entry stores the encrypted key (`sodium:`/`openssl:` envelope, key derived from WordPress salts via versioned KDF `v1`), a masked display value, the network UUID, the last validation result, `next_check_at`, and `grace_until`.
+- If salts change and decryption fails, `License_Registry::needs_reconnect()` is true and the administrator must paste the key again; ciphertext is never logged or exposed.
+- `ensure_network_uuid()` creates the stable random network UUID sent with multisite payloads (`pom_license_network_uuid` option).
+
+Storage contract consumers: `POM_Private_Updates` in POM Standard reads this registry through its own minimal reader (`plugins/pom-pomstandard/includes/license-registry-reader.php`). Any change to the option name, entry schema, KDF, or envelope must update both sides and bump the version markers.
+
+### License_Client
+
+HTTP wrapper for `pom-lic/v2`: `validate()`, `status()`, `deactivate_domain()`, `validate_and_cache()`, `cached_or_revalidate()`. The API base is filterable via `pom_license_api_base` for local/staging account servers.
+
+Grace behavior: a `network_error` (account outage) keeps the previously cached valid state while `grace_until` (7 days after the last valid check) has not passed; deterministic failures (invalid key, revoked, expired, product mismatch) clear grace immediately.
+
+### License_Field and the License settings tab
+
+`License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). Multisite keys can only be changed by network administrators; site administrators see masked status only.
+
+Products never register their own license submenu. Instead they add a "License" section to their existing framework settings page through their settings filter:
+
+```php
+use POMFramework\Licensing\License_Field;
+
+add_filter('my_plugin_settings', static function ($settings) {
+    if (is_array($settings) && class_exists(License_Field::class)) {
+        $settings['license'] = License_Field::settings_section('my-product', 'My Product');
+    }
+
+    return $settings;
+});
+```
+
+That renders the tab at `options-general.php?page=<page>&section=license`. To add a license tab inside an existing section (as POM Events does inside the theme options Events section), use `License_Field::settings_tab($product_slug, $label)` and assign it to `$settings['<section>']['tab']['license']`.
+
+Because the form posts to `admin-post.php` (which never fires settings page hooks), adapters must register the handler on every admin request:
+
+```php
+add_action('init', static function (): void {
+    if (class_exists(License_Field::class)) {
+        License_Field::boot();
+    }
+}, 5);
+```
+
+After a successful save-and-validate the `pom_license_saved` action fires with `($product_slug, $result)` — POM AI uses it to delete its legacy key-pair option.
+
+### License_Notices
+
+`License_Notices::register( $slug, $label, $settings_path )` (called from each
+adapter's `init` hook) adds the product to one combined, dismissible wp-admin
+notice that only appears when a license actually needs action: no stored key,
+undecryptable key, or a deterministic validation failure (invalid, expired,
+revoked, product mismatch, domain problems). Valid licenses, outage grace
+windows, and transient network errors never nag. On multisite the notice
+respects the network-scoped registry: a valid network license silences every
+subsite, and when something is missing only users with
+`manage_network_options` see it, and only in the network admin or on the main
+site — subsite screens always stay clean.
+
+The shared client also reports `multisite: '1'` to account.pom.es on every
+call; the server rejects update checks from multisite installs whose plan
+lacks `allows_multisite` (`multisite_not_allowed`) while leaving service
+operations untouched, and validation responses include `multisite_allowed`.
+
+### Custom subsection rendering with render_callback
+
+`POM_Framework_Settings::render_content()` supports a `render_callback` key on any subsection definition. When present and callable, the callback receives `($page_slug, $section, $subsection)` and fully replaces the standard settings form for that tab. The license tab is built on this, and any product can use it for custom tab content without intercepting its whole settings page callback.
+
+### Writing a product license adapter
+
+See `includes/license-adapter.php` in POM Translate/Tweaks/Cache/LMS/Events or `themes/pom/includes/license-adapter.php`. An adapter only declares the canonical product slug, the settings filter to extend, and product-specific constraints (e.g. POM Cache never touches cache hot paths; POM Events hosts its tab inside the theme options Events section). Adapters never invent key options and never bypass the registry.
+
+Coordination rule: many plugins bundle this framework in their own `vendor/pom-labs/pom-framework` copy, and the first registered autoloader wins for the whole request. Rolling out changes to `src/Licensing/` or `POM_Framework_Settings` therefore requires a `composer update pom-labs/pom-framework` in every bundling repository, not only in the licensing consumers.
 
 ## Additional resources
 
