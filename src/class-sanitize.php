@@ -12,17 +12,128 @@ if (!function_exists('sanitize_pom_framework_background_image')) {
             return [];
         }
 
-        if (is_array($value)) {
-            return $value;
+        if (!is_array($value)) {
+            $value = json_decode(stripslashes($value), true);
         }
 
-        return json_decode(stripslashes($value), true);
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $allowed_values = [
+            'background-repeat' => ['repeat', 'repeat-x', 'repeat-y', 'prepeat-y', 'no-repeat'],
+            'background-attachment' => ['scroll', 'fixed'],
+            'custom_horizontal_alignment_unit' => ['%', 'px', 'rem', 'em'],
+            'custom_vertical_alignment_unit' => ['%', 'px', 'rem', 'em'],
+            'custom_background_size_width_unit' => ['%', 'px', 'rem', 'em'],
+            'custom_background_size_height_unit' => ['%', 'px', 'rem', 'em'],
+        ];
+        $numeric_keys = [
+            'custom_horizontal_alignment_number',
+            'custom_vertical_alignment_number',
+            'custom_background_size_width_number',
+            'custom_background_size_height_number',
+        ];
+        $sanitized = [];
+
+        if (isset($value['background-image'])) {
+            $sanitized['background-image'] = esc_url_raw((string) $value['background-image']);
+        }
+
+        foreach ($allowed_values as $key => $options) {
+            $candidate = isset($value[$key]) ? sanitize_text_field((string) $value[$key]) : '';
+            if (in_array($candidate, $options, true)) {
+                $sanitized[$key] = $candidate;
+            }
+        }
+
+        foreach ($numeric_keys as $key) {
+            if (!isset($value[$key]) || $value[$key] === '') {
+                continue;
+            }
+
+            $candidate = filter_var($value[$key], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+            if ($candidate !== '' && is_numeric($candidate)) {
+                $sanitized[$key] = $candidate;
+            }
+        }
+
+        $position_pattern = '/^-?(?:\d+|\d*\.\d+)(?:%|px|rem|em)$/';
+        $horizontal = isset($value['horizontal_alignment']) ? sanitize_text_field((string) $value['horizontal_alignment']) : '';
+        $vertical = isset($value['vertical_alignment']) ? sanitize_text_field((string) $value['vertical_alignment']) : '';
+
+        if (!in_array($horizontal, ['left', 'center', 'right'], true) && !preg_match($position_pattern, $horizontal)) {
+            $horizontal = '';
+        }
+        if (!in_array($vertical, ['top', 'center', 'bottom'], true) && !preg_match($position_pattern, $vertical)) {
+            $vertical = '';
+        }
+
+        if (($horizontal === '' || $vertical === '') && isset($value['background-position'])) {
+            $position_parts = preg_split('/\s+/', trim((string) $value['background-position']));
+            if (is_array($position_parts) && count($position_parts) === 2) {
+                $legacy_horizontal = sanitize_text_field($position_parts[0]);
+                $legacy_vertical = sanitize_text_field($position_parts[1]);
+                if ($horizontal === '' && (in_array($legacy_horizontal, ['left', 'center', 'right'], true) || preg_match($position_pattern, $legacy_horizontal))) {
+                    $horizontal = $legacy_horizontal;
+                }
+                if ($vertical === '' && (in_array($legacy_vertical, ['top', 'center', 'bottom'], true) || preg_match($position_pattern, $legacy_vertical))) {
+                    $vertical = $legacy_vertical;
+                }
+            }
+        }
+
+        if ($horizontal !== '') {
+            $sanitized['horizontal_alignment'] = $horizontal;
+        }
+        if ($vertical !== '') {
+            $sanitized['vertical_alignment'] = $vertical;
+        }
+        if ($horizontal !== '' && $vertical !== '') {
+            $sanitized['background-position'] = $horizontal . ' ' . $vertical;
+        }
+
+        $background_size = isset($value['background-size']) ? sanitize_text_field((string) $value['background-size']) : '';
+        if (in_array($background_size, ['auto', 'cover', 'contain'], true)) {
+            $sanitized['background-size'] = $background_size;
+        }
+        elseif ($background_size !== '') {
+            $size_parts = preg_split('/\s+/', trim($background_size));
+            $valid_parts = is_array($size_parts) && count($size_parts) > 0 && count($size_parts) <= 2;
+            foreach ((array) $size_parts as $size_part) {
+                if ($size_part !== 'auto' && !preg_match($position_pattern, $size_part)) {
+                    $valid_parts = false;
+                    break;
+                }
+            }
+
+            if ($valid_parts) {
+                $sanitized['background-size'] = implode(' ', $size_parts);
+            }
+        }
+
+        foreach (['background-width', 'background-height'] as $legacy_size_key) {
+            if (!isset($value[$legacy_size_key]) || $value[$legacy_size_key] === '') {
+                continue;
+            }
+
+            $legacy_size = filter_var($value[$legacy_size_key], FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+            if ($legacy_size !== '' && is_numeric($legacy_size)) {
+                $sanitized[$legacy_size_key] = $legacy_size;
+            }
+        }
+
+        if (isset($value['lazyload'])) {
+            $sanitized['lazyload'] = filter_var($value['lazyload'], FILTER_VALIDATE_BOOLEAN);
+        }
+
+        return $sanitized;
     }
 }
 
 if (!function_exists('sanitize_pom_framework_button')) {
     function sanitize_pom_framework_button($value) {
-        return $value;
+        return sanitize_text_field($value);
     }
 }
 
@@ -87,9 +198,17 @@ if (!function_exists('sanitize_pom_framework_code_js')) {
 
 if (!function_exists('sanitize_pom_framework_code_json')) {
     function sanitize_pom_framework_code_json($value): string {
-        $filtered_js = esc_js($value);
+        $value = trim((string) $value);
+        if ($value === '') {
+            return '';
+        }
 
-        return stripslashes($filtered_js);
+        json_decode($value, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return '';
+        }
+
+        return $value;
     }
 }
 
@@ -129,21 +248,7 @@ if (!function_exists('sanitize_pom_framework_email')) {
 
 if (!function_exists('sanitize_pom_framework_file')) {
     function sanitize_pom_framework_file($value) {
-        $max_file_size = apply_filters('pom_framework_max_file_size', 1073741824); // In bytes. Default max 1GB
-
-        $allowed_mime_types = [
-            'text/plain',
-            'application/msword', // .doc
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-            'application/pdf',
-            'image/jpeg',
-            'image/png',
-            'image/gif'
-        ];
-        $allowed_mime_types = apply_filters('pom_framework_allowed_mime_types', $allowed_mime_types);
-
-        // TODO: Finish sanitizing.
-        return $value;
+        return is_scalar($value) ? sanitize_text_field((string) $value) : '';
     }
 }
 
@@ -273,7 +378,14 @@ if (!function_exists('sanitize_pom_framework_trbl')) {
 
 if (!function_exists('sanitize_pom_framework_font')) {
     function sanitize_pom_framework_font($value) {
-        return sanitize_pom_framework_repeater($value);
+        return sanitize_pom_framework_repeater(
+            $value,
+            [
+                'name' => 'font_families',
+                'limit' => 5,
+                'fields' => pom_framework_get_font_field_definitions(),
+            ]
+        );
     }
 }
 
@@ -308,16 +420,27 @@ if (!function_exists('sanitize_pom_framework_repeater')) {
             $value = json_decode(stripslashes($value), true);
         }
 
-        if (!empty($value)) {
+        if (!empty($value) && is_array($value)) {
             $sanitized_array = [];
 
-            $limit = !empty($array_settings['limit']) ? (int)$array_settings['limit'] : '';
+            $limit = !empty($array_settings['limit']) ? absint($array_settings['limit']) : 0;
+            $field_definitions = pom_framework_get_field_definition_map($array_settings['fields'] ?? []);
 
             $i = 0;
             foreach ($value as $type => $items) {
+                $type = sanitize_key((string) $type);
+                if (!in_array($type, ['default', 'new'], true) || !is_array($items)) {
+                    continue;
+                }
+
                 foreach ($items as $index => $arr_data) {
-                    if (!empty($limit) && $limit === $i ++) {
+                    if ($limit > 0 && $i >= $limit) {
                         break;
+                    }
+
+                    $i++;
+                    if (!is_array($arr_data)) {
+                        continue;
                     }
 
                     $repeater_identifier = '';
@@ -326,29 +449,31 @@ if (!function_exists('sanitize_pom_framework_repeater')) {
                             $sanitized_array[$type][$index][$arr_key] = $repeater_identifier = sanitize_pom_framework_text($arr_value);
                         }
                         elseif ($arr_key === 'default_values') {
-                            $sanitized_array[$type][$index][$arr_key] = json_decode(stripslashes($arr_value), true);
+                            $sanitized_array[$type][$index][$arr_key] = pom_framework_sanitize_repeater_defaults($arr_value, $field_definitions, $settings_dir);
                         }
                         else {
-                            if (empty($arr_value['type'])) {
+                            $field_name = str_replace('[]', '', (string) $arr_key);
+                            if (!isset($field_definitions[$field_name]) || !is_array($arr_value)) {
                                 continue;
                             }
 
-                            $sanitize_function_name = "sanitize_pom_framework_{$arr_value['type']}";
-                            $field_name = str_replace('[]', '', $arr_key);
+                            $field_definition = $field_definitions[$field_name];
+                            $field_type = strtolower((string) ($field_definition['type'] ?? 'text'));
 
-                            if (!function_exists($sanitize_function_name)) {
-                                continue;
-                            }
-
-                            if (isset($array_settings['name']) && ($arr_value['type'] === 'code_html' || $arr_value['type'] === 'code_css' || $arr_value['type'] === 'code_js' || $arr_value['type'] === 'code_json')) {
+                            if (isset($array_settings['name']) && in_array($field_type, ['code_html', 'code_css', 'code_js', 'code_json'], true)) {
                                 $file_name = "{$array_settings['name']}_{$repeater_identifier}_$field_name";
-                                $sanitized_array[$type][$index][$field_name]['value'] = POM_Framework_Disk::save_to_file($file_name, $arr_value['value'], str_replace('code_', '', $arr_value['type']), $settings_dir);
+                                $field_value = $arr_value['value'] ?? '';
+                                if ($field_type === 'code_html' || $field_type === 'code_json') {
+                                    $field_value = pom_framework_sanitize_defined_field($field_value, $field_definition, $settings_dir, $file_name);
+                                }
+
+                                $sanitized_array[$type][$index][$field_name]['value'] = POM_Framework_Disk::save_to_file($file_name, $field_value, str_replace('code_', '', $field_type), $settings_dir);
                             }
                             else {
-                                $sanitized_array[$type][$index][$field_name]['value'] = $sanitize_function_name($arr_value['value']);
+                                $sanitized_array[$type][$index][$field_name]['value'] = pom_framework_sanitize_defined_field($arr_value['value'] ?? '', $field_definition, $settings_dir, $field_name);
                             }
 
-                            $sanitized_array[$type][$index][$field_name]['type'] = $arr_value['type'];
+                            $sanitized_array[$type][$index][$field_name]['type'] = $field_type;
                         }
                     }
                 }
@@ -358,6 +483,249 @@ if (!function_exists('sanitize_pom_framework_repeater')) {
         }
 
         return [];
+    }
+}
+
+if (!function_exists('pom_framework_get_field_definition_map')) {
+    function pom_framework_get_field_definition_map($fields): array {
+        if (!is_array($fields)) {
+            return [];
+        }
+
+        $definitions = [];
+        foreach ($fields as $field) {
+            if (!is_array($field) || empty($field['name'])) {
+                continue;
+            }
+
+            $definitions[(string) $field['name']] = $field;
+        }
+
+        return $definitions;
+    }
+}
+
+if (!function_exists('pom_framework_get_font_field_definitions')) {
+    /**
+     * Return the fixed schema used by the composite Font field.
+     *
+     * Why: Font renders an internal repeater, so its server-side sanitizer must
+     * have the same immutable field names and options without trusting types
+     * copied back from the browser.
+     */
+    function pom_framework_get_font_field_definitions(): array {
+        return [
+            [
+                'type' => 'text',
+                'name' => 'font_name',
+            ],
+            [
+                'type' => 'select',
+                'name' => 'font_type',
+                'options' => [
+                    'normal' => 'Normal',
+                    'variable' => 'Variable',
+                ],
+                'default' => 'normal',
+            ],
+            [
+                'type' => 'select',
+                'name' => 'font_fallback',
+                'options' => [
+                    'sans_serif' => 'Sans serif',
+                    'serif' => 'Serif',
+                    'monospace' => 'Monospace',
+                ],
+            ],
+            [
+                'type' => 'repeater',
+                'name' => 'font_variant',
+                'limit' => 18,
+                'fields' => [
+                    [
+                        'type' => 'text',
+                        'name' => 'variant_name',
+                    ],
+                    [
+                        'type' => 'select',
+                        'name' => 'font_weight',
+                        'options' => [
+                            'lighter' => 'Lighter',
+                            '300' => '300',
+                            '400' => '400',
+                            '600' => '600',
+                            '700' => '700',
+                            'bolder' => 'Bolder',
+                        ],
+                    ],
+                    [
+                        'type' => 'select',
+                        'name' => 'font_style',
+                        'options' => [
+                            'normal' => 'Normal',
+                            'italic' => 'Italic',
+                            'oblique' => 'Oblique',
+                        ],
+                    ],
+                    [
+                        'type' => 'font_picker',
+                        'name' => 'font_variants',
+                    ],
+                ],
+            ],
+            [
+                'type' => 'font_picker',
+                'name' => 'font_variable_files',
+            ],
+            [
+                'type' => 'text',
+                'name' => 'font_variable_weight_range',
+            ],
+            [
+                'type' => 'text',
+                'name' => 'font_variable_stretch_range',
+            ],
+            [
+                'type' => 'select',
+                'name' => 'font_variable_style',
+                'options' => [
+                    'normal' => 'Normal',
+                    'italic' => 'Italic',
+                    'oblique' => 'Oblique',
+                ],
+                'default' => 'normal',
+            ],
+            [
+                'type' => 'select',
+                'name' => 'font_variable_display',
+                'options' => [
+                    'auto' => 'Auto',
+                    'block' => 'Block',
+                    'swap' => 'Swap',
+                    'fallback' => 'Fallback',
+                    'optional' => 'Optional',
+                ],
+                'default' => 'swap',
+            ],
+        ];
+    }
+}
+
+if (!function_exists('pom_framework_get_allowed_option_values')) {
+    function pom_framework_get_allowed_option_values($options): array {
+        if (!is_array($options)) {
+            return [];
+        }
+
+        $allowed = [];
+        foreach ($options as $key => $label) {
+            if (is_array($label) && isset($label['group_options']) && is_array($label['group_options'])) {
+                foreach (array_keys($label['group_options']) as $group_key) {
+                    $allowed[] = (string) $group_key;
+                }
+                continue;
+            }
+
+            $allowed[] = (string) $key;
+        }
+
+        return array_values(array_unique($allowed));
+    }
+}
+
+if (!function_exists('pom_framework_sanitize_defined_field')) {
+    function pom_framework_sanitize_defined_field($value, array $field_definition, string $settings_dir = 'pom-framework', string $field_name = '') {
+        $type = strtolower((string) ($field_definition['type'] ?? 'text'));
+
+        if ($type === 'repeater') {
+            return sanitize_pom_framework_repeater(
+                $value,
+                [
+                    'name' => $field_name !== '' ? $field_name : ($field_definition['name'] ?? ''),
+                    'limit' => $field_definition['limit'] ?? 0,
+                    'fields' => $field_definition['fields'] ?? [],
+                ],
+                $settings_dir
+            );
+        }
+
+        $sanitize_function_name = "sanitize_pom_framework_$type";
+        if (!function_exists($sanitize_function_name)) {
+            return is_scalar($value) ? sanitize_text_field((string) $value) : '';
+        }
+
+        $allowed = pom_framework_get_allowed_option_values($field_definition['options'] ?? []);
+        if ($type === 'checkbox' && !empty($allowed)) {
+            $values = is_array($value) ? $value : [$value];
+            $values = array_map(static function($item): string {
+                return sanitize_text_field((string) $item);
+            }, $values);
+
+            return array_values(array_intersect($values, $allowed));
+        }
+
+        if ($type === 'select' && !empty($field_definition['multiple']) && !empty($allowed)) {
+            $values = is_array($value) ? $value : explode(',', (string) $value);
+            $values = array_map(static function($item): string {
+                return sanitize_text_field((string) $item);
+            }, $values);
+
+            return implode(',', array_values(array_intersect($values, $allowed)));
+        }
+
+        $sanitized = $sanitize_function_name($value);
+
+        if (in_array($type, ['select', 'radio', 'radio_icons', 'color_palette'], true) && !empty($allowed)) {
+            $sanitized = (string) $sanitized;
+            if (!in_array($sanitized, $allowed, true)) {
+                $default = isset($field_definition['default']) ? (string) $field_definition['default'] : '';
+                return in_array($default, $allowed, true) ? $default : '';
+            }
+        }
+
+        if (in_array($type, ['number', 'quantity', 'range'], true) && $sanitized !== '' && is_numeric($sanitized)) {
+            $numeric_value = (float) $sanitized;
+            if (isset($field_definition['min']) && is_numeric($field_definition['min'])) {
+                $numeric_value = max((float) $field_definition['min'], $numeric_value);
+            }
+            if (isset($field_definition['max']) && is_numeric($field_definition['max'])) {
+                $numeric_value = min((float) $field_definition['max'], $numeric_value);
+            }
+
+            return strpos((string) $sanitized, '.') === false ? (string) (int) $numeric_value : (string) $numeric_value;
+        }
+
+        return $sanitized;
+    }
+}
+
+if (!function_exists('pom_framework_sanitize_repeater_defaults')) {
+    function pom_framework_sanitize_repeater_defaults($value, array $field_definitions, string $settings_dir): array {
+        if (is_string($value)) {
+            $value = json_decode(stripslashes($value), true);
+        }
+
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach ($field_definitions as $field_name => $field_definition) {
+            if (!isset($value[$field_name]) || !is_array($value[$field_name])) {
+                continue;
+            }
+
+            $sanitized[$field_name] = [
+                'value' => pom_framework_sanitize_defined_field($value[$field_name]['value'] ?? '', $field_definition, $settings_dir, $field_name),
+                'disabled' => !empty($value[$field_name]['disabled']),
+            ];
+        }
+
+        if (array_key_exists('can_be_removed', $value)) {
+            $sanitized['can_be_removed'] = !empty($value['can_be_removed']);
+        }
+
+        return $sanitized;
     }
 }
 

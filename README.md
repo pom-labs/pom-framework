@@ -476,7 +476,7 @@ return [
 ];
 ```
 
-When this structure is posted, `sanitize_pom_framework_repeater()` walks each layer, enforces the limit, and delegates to the appropriate sanitizers (`sanitize_pom_framework_select`, `sanitize_pom_framework_number`, etc.) so the saved JSON mirrors the UI without exposing unsanitised input.
+When this structure is posted, `sanitize_pom_framework_repeater()` walks each layer, enforces the limit, resolves every nested field against the server-side `fields` definition, and delegates to the corresponding sanitizer. Client-provided field names and types that are not present in that definition are discarded, and closed controls such as selects, radios, and checkbox groups are restricted to their declared `options`.
 
 ### Field library
 
@@ -691,7 +691,7 @@ foreach ($enabled_settings as $module => $status) {
 
 ### Retrieving saved values
 
-When a settings form is submitted the save handler loops over the payload, infers the field type from the settings definition, and calls the corresponding `sanitize_pom_framework_{type}` helper before the data touches disk. That means a URL field always runs through `sanitize_pom_framework_url()`, a number field strips non-numeric characters with `sanitize_pom_framework_number()`, and a checkbox collapses to either `yes` or `no` regardless of what the browser sends.
+When a settings form is submitted the save handler accepts only fields present in the server-side settings definition, infers each field type from that definition, and calls the corresponding `sanitize_pom_framework_{type}` helper before the data touches disk. Closed controls are also validated against their declared options. That means a URL field always runs through `sanitize_pom_framework_url()`, a number field strips non-numeric characters with `sanitize_pom_framework_number()`, and a checkbox collapses to either `yes` or `no` regardless of what the browser sends.
 
 Consider this fragment from a `fields.php` file:
 

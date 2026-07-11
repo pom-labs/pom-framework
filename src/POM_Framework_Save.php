@@ -62,7 +62,10 @@ class POM_Framework_Save {
                     $setting_name = preg_replace('/\[.*$/', '', $setting_name);
 
                     $field_definition = (new self)->get_field_definition($settings_file_path, $dir, $name);
-                    $field_definition = is_array($field_definition) ? $field_definition : [];
+                    if (!is_array($field_definition)) {
+                        continue;
+                    }
+
                     $normalized_setting_name = $field_definition['name'] ?? $setting_name;
 
                     if (!POM_Framework_Helper::field_should_persist($field_definition)) {
@@ -77,7 +80,16 @@ class POM_Framework_Save {
                     $save_target = (new self)->normalize_save_target($field_definition['save_as'] ?? '');
 
                     if ($type === 'repeater') {
-                        $sanitized_value = $sanitize_function_name($value, ['name' => $name], $page_slug);
+                        $repeater_settings = [
+                            'name' => $name,
+                            'fields' => isset($field_definition['fields']) && is_array($field_definition['fields']) ? $field_definition['fields'] : [],
+                        ];
+
+                        if (isset($field_definition['limit'])) {
+                            $repeater_settings['limit'] = absint($field_definition['limit']);
+                        }
+
+                        $sanitized_value = $sanitize_function_name($value, $repeater_settings, $page_slug);
 
                         if ($save_target['storage'] === 'default') {
                             unset($fields_metadata[$normalized_setting_name]);
@@ -111,7 +123,7 @@ class POM_Framework_Save {
                         }
                     }
                     else {
-                        $sanitized = $sanitize_function_name($value);
+                        $sanitized = pom_framework_sanitize_defined_field($value, $field_definition, $page_slug, $name);
 
                         if ($save_target['storage'] === 'default') {
                             unset($fields_metadata[$normalized_setting_name]);
