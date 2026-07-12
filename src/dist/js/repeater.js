@@ -154,7 +154,7 @@ jQuery(function($) {
          * Exclude config hidden field and
          * inner repeater fields in main repeater.
          */
-        if ($field_name === 'config' || (!$is_child_repeater && $is_child_repeater_field)) {
+        if ($field_name === 'config' || $field_name === 'config_signature' || (!$is_child_repeater && $is_child_repeater_field)) {
           continue;
         }
 
@@ -371,6 +371,7 @@ jQuery(function($) {
     $spinner.show();
 
     let $config = $this.siblings('[name="config"]').val();
+    let $configSignature = $this.siblings('[name="config_signature"]').val();
 
     $.ajax({
       url: pom_framework_repeater.ajax_url,
@@ -379,6 +380,7 @@ jQuery(function($) {
         action: 'pom_framework_get_repeater_item_html',
         nonce: pom_framework_repeater.nonce,
         config: $config,
+        config_signature: $configSignature,
         items: $item_count
       },
       success: function($response) {
@@ -606,7 +608,8 @@ jQuery(function($) {
         nonce: pom_framework_repeater.nonce,
         defaults: $this.attr('data-defaults'),
         fields: $this.attr('data-fields'),
-        title: $this.attr('data-title')
+        title: $this.attr('data-title'),
+        payload_signature: $this.attr('data-payload-signature')
       },
       success: function($response) {
         let $bulk_actions = $wrapper.children('.repeater-bulk-actions').first();

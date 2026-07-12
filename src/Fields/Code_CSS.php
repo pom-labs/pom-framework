@@ -2,6 +2,7 @@
 
 namespace POMFramework\Fields;
 
+use POMFramework\POM_Framework_Disk;
 use POMFramework\POM_Framework_Helper;
 
 class Code_CSS {
@@ -20,8 +21,9 @@ class Code_CSS {
         }
 
         $value = '';
-        if (file_exists($args['value'])) {
-            $value = file_get_contents($args['value']);
+        $managed_contents = POM_Framework_Disk::read_managed_file_path($args['value'] ?? '');
+        if ($managed_contents !== null) {
+            $value = $managed_contents;
         }
         elseif (!empty($args['default'])) {
             $value = $args['default'];
@@ -29,7 +31,7 @@ class Code_CSS {
 
         ?>
 
-        <textarea aria-label="<?= $args['label'] ?>" id="<?= $args['id'] ?>" name="<?= $args['name'] ?>" class="form-control pom-framework-code-editor-css <?= $args['class'] ?>"<?= $data_dependencies ?> data-type="code_css"><?= $value ?></textarea>
+        <textarea aria-label="<?= esc_attr($args['label']) ?>" id="<?= esc_attr($args['id']) ?>" name="<?= esc_attr($args['name']) ?>" class="form-control pom-framework-code-editor-css <?= esc_attr($args['class']) ?>"<?= $data_dependencies ?> data-type="code_css"><?= esc_textarea($value) ?></textarea>
 
         <?php
 

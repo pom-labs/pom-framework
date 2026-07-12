@@ -10,6 +10,7 @@ namespace POMFramework\Fields;
 use POMFramework\POM_Framework_Helper;
 use POMFramework\POM_Framework;
 use POMFramework\POM_Framework_Ajax;
+use POMFramework\POM_Framework_Disk;
 
 class Repeater {
 
@@ -38,6 +39,7 @@ class Repeater {
         }
 
         $repeater_config = base64_encode((string) wp_json_encode($repeater_config));
+        $repeater_config_signature = POM_Framework_Ajax::sign_repeater_payload($repeater_config);
 
         //$json = json_decode(htmlspecialchars_decode($args['value']), true);
         $json = $args['value'];
@@ -234,9 +236,13 @@ class Repeater {
             }
 
             if (!empty($args['defaults'])) {
+                $defaults_payload = base64_encode((string) wp_json_encode($args['defaults']));
+                $fields_payload = base64_encode((string) wp_json_encode($args['fields']));
+                $restore_title = (string) ($args['title'] ?? '');
+                $restore_signature = POM_Framework_Ajax::sign_repeater_payload($defaults_payload, $fields_payload, $restore_title);
                 ?>
 
-	                <button class="button button-secondary right restore-repeater-defaults" data-title="<?= esc_attr($args['title']) ?>" data-fields="<?= esc_attr(base64_encode((string) wp_json_encode($args['fields']))) ?>" data-defaults="<?= esc_attr(base64_encode((string) wp_json_encode($args['defaults']))) ?>"><?php esc_html_e('Restore defaults', 'pom-framework') ?></button>
+	                <button class="button button-secondary right restore-repeater-defaults" data-title="<?= esc_attr($restore_title) ?>" data-fields="<?= esc_attr($fields_payload) ?>" data-defaults="<?= esc_attr($defaults_payload) ?>" data-payload-signature="<?= esc_attr($restore_signature) ?>"><?php esc_html_e('Restore defaults', 'pom-framework') ?></button>
 
                 <?php
             }
@@ -244,6 +250,7 @@ class Repeater {
             ?>
 
 	            <input type="hidden" name="config" value="<?= esc_attr($repeater_config) ?>">
+	            <input type="hidden" name="config_signature" value="<?= esc_attr($repeater_config_signature) ?>">
 
             <?php
 
@@ -271,8 +278,9 @@ class Repeater {
                                 foreach ($repeater_item_value as $repeater_item_arr_key => $repeater_item_arr_value) {
                                     if ($repeater_item_arr_key === 'type') {
                                         if ($repeater_item_arr_value === 'code_html' || $repeater_item_arr_value === 'code_css' || $repeater_item_arr_value === 'code_js' || $repeater_item_arr_value === 'code_json') {
-                                            if (file_exists($repeater_item_value['value'])) {
-                                                $args['value']['new'][$repeater_key][$repeater_item_key]['value'] = file_get_contents($repeater_item_value['value']);
+                                            $managed_contents = POM_Framework_Disk::read_managed_file_path($repeater_item_value['value'] ?? '');
+                                            if ($managed_contents !== null) {
+	                                            $args['value']['new'][$repeater_key][$repeater_item_key]['value'] = $managed_contents;
                                             }
                                         }
                                     }

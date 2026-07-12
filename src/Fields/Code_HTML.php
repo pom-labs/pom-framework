@@ -2,6 +2,7 @@
 
 namespace POMFramework\Fields;
 
+use POMFramework\POM_Framework_Disk;
 use POMFramework\POM_Framework_Helper;
 
 class Code_HTML {
@@ -20,8 +21,9 @@ class Code_HTML {
         }
 
         $value = '';
-        if (file_exists($args['value'])) {
-            $value = file_get_contents($args['value']);
+        $managed_contents = POM_Framework_Disk::read_managed_file_path($args['value'] ?? '');
+        if ($managed_contents !== null) {
+            $value = $managed_contents;
         }
         elseif (!empty($args['default'])) {
             $value = $args['default'];
@@ -29,7 +31,7 @@ class Code_HTML {
 
         ?>
 
-        <textarea aria-label="<?= $args['label'] ?>" id="<?= POM_Framework_Helper::generate_random_string(10, false) ?>" name="<?= $args['name'] ?>" class="form-control pom-framework-code-editor-html <?= $args['class'] ?>"<?= $data_dependencies ?> data-type="code_html"><?= $value ?></textarea>
+        <textarea aria-label="<?= esc_attr($args['label']) ?>" id="<?= esc_attr(POM_Framework_Helper::generate_random_string(10, false)) ?>" name="<?= esc_attr($args['name']) ?>" class="form-control pom-framework-code-editor-html <?= esc_attr($args['class']) ?>"<?= $data_dependencies ?> data-type="code_html"><?= esc_textarea($value) ?></textarea>
 
         <?php
 

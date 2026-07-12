@@ -35,8 +35,11 @@ class POM_Framework_Translations {
                 $string = POM_Framework_Settings::get_setting_value($this->settings_dir, $data['filename'], $name, $data['type']);
                 $type = strtolower($data['type']);
 
-                if (in_array($type, ['code_html', 'tinymce'], true) && file_exists($string)) {
-                    $string = file_get_contents($string);
+                if (in_array($type, ['code_html', 'tinymce'], true)) {
+                    $managed_contents = POM_Framework_Disk::read_managed_file_path($string);
+                    if ($managed_contents !== null) {
+                        $string = $managed_contents;
+                    }
                 }
 
                 pll_register_string($name, $string, 'POM Framework', $data['multiline']);

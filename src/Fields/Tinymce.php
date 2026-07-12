@@ -2,6 +2,7 @@
 
 namespace POMFramework\Fields;
 
+use POMFramework\POM_Framework_Disk;
 use POMFramework\POM_Framework_Helper;
 
 class Tinymce {
@@ -24,8 +25,9 @@ class Tinymce {
         }
 
         $value = '';
-        if (file_exists($args['value'])) {
-            $value = file_get_contents($args['value']);
+        $managed_contents = POM_Framework_Disk::read_managed_file_path($args['value'] ?? '');
+        if ($managed_contents !== null) {
+            $value = $managed_contents;
         }
         elseif (!empty($args['default'])) {
             $value = $args['default'];

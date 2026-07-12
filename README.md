@@ -478,6 +478,8 @@ return [
 
 When this structure is posted, `sanitize_pom_framework_repeater()` walks each layer, enforces the limit, resolves every nested field against the server-side `fields` definition, and delegates to the corresponding sanitizer. Client-provided field names and types that are not present in that definition are discarded, and closed controls such as selects, radios, and checkbox groups are restricted to their declared `options`.
 
+AJAX-created repeater rows and restored defaults also carry an HMAC of the exact server-rendered schema. Requests with altered field definitions are rejected even when they have a valid authenticated admin nonce. File-backed code and TinyMCE values are read only after `realpath()` confirms that the file belongs to the current site's managed `wp-content/settings/pom-framework/` tree.
+
 ### Field library
 
 The framework ships the following field types. Use this table to pick the right control and learn about its quirks.

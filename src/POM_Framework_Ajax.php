@@ -5,6 +5,21 @@ namespace POMFramework;
 class POM_Framework_Ajax {
     public const AJAX_NONCE_ACTION = 'pom_framework_ajax';
 
+    /**
+     * Sign an exact repeater payload rendered by the server.
+     *
+     * Why: a nonce proves request origin but does not make browser-supplied field
+     * definitions trustworthy. The signature prevents editors from replacing a
+     * legitimate repeater schema with fields that read arbitrary server files.
+     */
+    public static function sign_repeater_payload(string ...$parts): string {
+        return hash_hmac('sha256', implode("\0", $parts), wp_salt('auth'));
+    }
+
+    public static function verify_repeater_payload_signature(string $signature, string ...$parts): bool {
+        return $signature !== '' && hash_equals(self::sign_repeater_payload(...$parts), $signature);
+    }
+
     public function __construct() {
         add_action('wp_ajax_pom_framework_get_icon_library_icons', [$this, 'get_library_icons']);
         add_action('wp_ajax_pom_framework_get_icon_by_name', [$this, 'get_icon_by_name']);
@@ -161,11 +176,12 @@ class POM_Framework_Ajax {
     public function get_repeater_item_html(): void {
         $this->verify_ajax_request();
 
-        $config = isset($_REQUEST['config']) ? sanitize_text_field(wp_unslash($_REQUEST['config'])) : '';
+        $config = isset($_REQUEST['config']) && is_scalar($_REQUEST['config']) ? sanitize_text_field(wp_unslash($_REQUEST['config'])) : '';
+        $signature = isset($_REQUEST['config_signature']) && is_scalar($_REQUEST['config_signature']) ? sanitize_text_field(wp_unslash($_REQUEST['config_signature'])) : '';
         $items = isset($_REQUEST['items']) ? absint(wp_unslash($_REQUEST['items'])) : 0;
 
-        if (empty($config)) {
-            wp_die();
+        if ($config === '' || !self::verify_repeater_payload_signature($signature, $config)) {
+            wp_die('', '', ['response' => 403]);
         }
 
         $decoded_config = base64_decode($config, true);
@@ -226,12 +242,14 @@ class POM_Framework_Ajax {
     public function restore_repeater_defaults(): void {
         $this->verify_ajax_request();
 
-        $defaults = isset($_REQUEST['defaults']) ? sanitize_text_field(wp_unslash($_REQUEST['defaults'])) : '';
-        $fields = isset($_REQUEST['fields']) ? sanitize_text_field(wp_unslash($_REQUEST['fields'])) : '';
-        $title = isset($_REQUEST['title']) ? wp_kses_post(wp_unslash($_REQUEST['title'])) : '';
+        $defaults = isset($_REQUEST['defaults']) && is_scalar($_REQUEST['defaults']) ? sanitize_text_field(wp_unslash($_REQUEST['defaults'])) : '';
+        $fields = isset($_REQUEST['fields']) && is_scalar($_REQUEST['fields']) ? sanitize_text_field(wp_unslash($_REQUEST['fields'])) : '';
+        $raw_title = isset($_REQUEST['title']) && is_scalar($_REQUEST['title']) ? (string) wp_unslash($_REQUEST['title']) : '';
+        $title = wp_kses_post($raw_title);
+        $signature = isset($_REQUEST['payload_signature']) && is_scalar($_REQUEST['payload_signature']) ? sanitize_text_field(wp_unslash($_REQUEST['payload_signature'])) : '';
 
-        if (empty($defaults)) {
-            wp_die();
+        if ($defaults === '' || !self::verify_repeater_payload_signature($signature, $defaults, $fields, $raw_title)) {
+            wp_die('', '', ['response' => 403]);
         }
 
         ob_start();

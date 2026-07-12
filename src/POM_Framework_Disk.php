@@ -473,6 +473,35 @@ HTACCESS;
     }
 
     /**
+     * Read a file only when it belongs to the current site's managed settings tree.
+     *
+     * Why: code and TinyMCE field values are stored as file paths, but a path sent
+     * through a forged field definition must never become an arbitrary file read.
+     *
+     * @return string|null Null when the path is outside the managed tree or unreadable.
+     */
+    public static function read_managed_file_path($path): ?string {
+        if (!is_scalar($path) || (string) $path === '') {
+            return null;
+        }
+
+        $real_path = realpath((string) $path);
+        $settings_root = realpath(self::get_settings_path(''));
+        if ($real_path === false || $settings_root === false || !is_file($real_path) || !is_readable($real_path)) {
+            return null;
+        }
+
+        $settings_prefix = trailingslashit($settings_root);
+        if (!str_starts_with($real_path, $settings_prefix)) {
+            return null;
+        }
+
+        $contents = file_get_contents($real_path);
+
+        return is_string($contents) ? $contents : null;
+    }
+
+    /**
      * Creates the directory in which the configuration files are saved.
      * If a multisite, it is subdivided into /sites/blog_id/.
      *
