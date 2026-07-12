@@ -114,22 +114,24 @@ class POM_Framework {
          * it is necessary to do the enqueue from the beginning.
          * Otherwise, the field is not rendered.
          */
-        if ($field_args['type'] === 'repeater' && !empty($field_args['fields'])) {
+        if (strtolower((string) $field_args['type']) === 'repeater' && !empty($field_args['fields'])) {
             foreach ($field_args['fields'] as $repeater_field) {
-                if (isset($repeater_field['type']) && ($repeater_field['type'] === 'code_html' || $repeater_field['type'] === 'code_css' || $repeater_field['type'] === 'code_js' || $repeater_field['type'] === 'code_json')) {
+                $repeater_field_type = strtolower((string) ($repeater_field['type'] ?? ''));
+
+                if (in_array($repeater_field_type, ['code_html', 'code_css', 'code_js', 'code_json'], true)) {
                     POM_Framework_Helper::enqueue_code_editor_assets();
                 }
 
-                if (isset($repeater_field['type']) && $repeater_field['type'] === 'Select') {
+                if ($repeater_field_type === 'select') {
                     wp_enqueue_script('pom-framework-select', POM_FRAMEWORK_SRC_URI . '/dist/js/select' . POM_FRAMEWORK_MIN . '.js', ['jquery'], null, true);
                 }
 
-                if (isset($repeater_field['type']) && $repeater_field['type'] === 'Color') {
+                if ($repeater_field_type === 'color') {
                     wp_enqueue_style('wp-color-picker');
                     wp_enqueue_script('pom-framework-color', POM_FRAMEWORK_SRC_URI . '/dist/js/color' . POM_FRAMEWORK_MIN . '.js', ['wp-color-picker'], null, true);
                 }
 
-                if (isset($repeater_field['type']) && $repeater_field['type'] === 'Font_Picker') {
+                if ($repeater_field_type === 'font_picker') {
                     $mime_types = array_values(POM_Framework_Helper::get_allowed_font_types());
                     $mime_types = array_merge(
                         $mime_types,

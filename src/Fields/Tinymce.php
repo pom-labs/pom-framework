@@ -25,8 +25,10 @@ class Tinymce {
         }
 
         $value = '';
-        $managed_contents = POM_Framework_Disk::read_managed_file_path($args['value'] ?? '');
-        if ($managed_contents !== null) {
+        if (!empty($args['value_is_content'])) {
+            $value = sanitize_pom_framework_tinymce($args['value'] ?? '');
+        }
+        elseif (($managed_contents = POM_Framework_Disk::read_managed_file_path($args['value'] ?? '')) !== null) {
             $value = $managed_contents;
         }
         elseif (!empty($args['default'])) {

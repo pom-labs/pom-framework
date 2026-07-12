@@ -77,19 +77,52 @@ class POM_Framework_Settings {
             $value = is_array($values) && isset($values[$field_name]) ? $values[$field_name] : '';
         }
 
-        if (!empty($type)) {
-            $sanitize_function_name = "sanitize_pom_framework_$type";
+        $normalized_type = strtolower((string) $type);
 
-            if (function_exists($sanitize_function_name)) {
-                $value = $sanitize_function_name($value);
-            }
+        if ($normalized_type !== '') {
+            $value = self::normalize_stored_value($value, $normalized_type);
         }
 
-        if ($type === 'font' && is_array($value)) {
+        if ($normalized_type === 'font' && is_array($value)) {
             $value = self::add_font_face_to_fonts($value);
         }
 
         return $value;
+    }
+
+    /**
+     * Normalize persisted data while remaining safe when this class is autoloaded directly.
+     *
+     * Why: Composer consumers can reference the settings reader before constructing the
+     * framework bootstrap. That historical usage must not become a fatal dependency on
+     * globally loaded sanitizer helpers.
+     */
+    private static function normalize_stored_value($value, string $type) {
+        if (function_exists('pom_framework_sanitize_stored_value')) {
+            return pom_framework_sanitize_stored_value($value, $type);
+        }
+
+        if ($type === 'repeater' || $type === 'font') {
+            if (is_string($value)) {
+                $value = json_decode(stripslashes($value), true);
+            }
+
+            return is_array($value) ? $value : [];
+        }
+
+        if (
+            in_array($type, ['code_html', 'code_css', 'code_js', 'code_json', 'tinymce'], true) &&
+            method_exists(POM_Framework_Disk::class, 'read_managed_file_path') &&
+            POM_Framework_Disk::read_managed_file_path($value) !== null
+        ) {
+            return (string) $value;
+        }
+
+        $sanitize_function_name = "sanitize_pom_framework_$type";
+
+        return function_exists($sanitize_function_name)
+            ? $sanitize_function_name($value)
+            : $value;
     }
 
     /**
@@ -787,23 +820,17 @@ class POM_Framework_Settings {
                                 $value = $field_should_persist ? self::get_setting_value($page_slug, $setting_key, $original_field_name) : ($field['value'] ?? '');
                                 $storage_metadata = $field_should_persist ? self::get_field_storage_metadata($page_slug, $setting_key, $original_field_name) : [];
                                 $field['name'] = $setting_key . '_' . $original_field_name;
+                                $field_type = strtolower((string) $field['type']);
 
-                                if ($field['type'] === 'checkbox' && isset($field['value']) && $field['value'] === true) {
+                                if ($field_type === 'checkbox' && isset($field['value']) && $field['value'] === true) {
                                     $field['value'] = 'yes';
                                 }
-                                elseif ($field['type'] === 'code_html' || $field['type'] === 'code_css' || $field['type'] === 'code_js') {
-                                    $source_value = $value;
-
-                                    if ($field_should_persist && empty($storage_metadata)) {
-                                        $source_value = POM_Framework_Disk::read_file($field['name'] . '.' . str_replace('code_', '', $field['type']), $page_slug);
-                                    }
-
-                                    $sanitize_function_name = "sanitize_pom_framework_{$field['type']}";
-                                    $field['value'] = function_exists($sanitize_function_name) ? $sanitize_function_name($source_value) : $source_value;
+                                elseif (in_array($field_type, ['code_html', 'code_css', 'code_js', 'code_json', 'tinymce'], true)) {
+                                    $field['value'] = $value;
+                                    $field['value_is_content'] = !empty($storage_metadata);
                                 }
                                 else {
-                                    $sanitize_function_name = "sanitize_pom_framework_{$field['type']}";
-                                    $field['value'] = function_exists($sanitize_function_name) ? $sanitize_function_name($value) : $value;
+                                    $field['value'] = self::normalize_stored_value($value, $field_type);
                                 }
 
                                 echo (new POM_Framework())::add_field($field);

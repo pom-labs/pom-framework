@@ -481,6 +481,27 @@ HTACCESS;
      * @return string|null Null when the path is outside the managed tree or unreadable.
      */
     public static function read_managed_file_path($path): ?string {
+        $real_path = self::get_managed_real_path($path);
+        if ($real_path === null) {
+            return null;
+        }
+
+        $contents = file_get_contents($real_path);
+
+        return is_string($contents) ? $contents : null;
+    }
+
+    /**
+     * Determine whether a value is a readable file in the current site's settings tree.
+     *
+     * Why: persisted code fields expose their managed path as their public read
+     * contract. Callers must be able to preserve that path without reading it.
+     */
+    public static function is_managed_file_path($path): bool {
+        return self::get_managed_real_path($path) !== null;
+    }
+
+    private static function get_managed_real_path($path): ?string {
         if (!is_scalar($path) || (string) $path === '') {
             return null;
         }
@@ -496,9 +517,7 @@ HTACCESS;
             return null;
         }
 
-        $contents = file_get_contents($real_path);
-
-        return is_string($contents) ? $contents : null;
+        return $real_path;
     }
 
     /**

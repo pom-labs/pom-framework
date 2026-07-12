@@ -463,10 +463,6 @@ if (!function_exists('sanitize_pom_framework_repeater')) {
                             if (isset($array_settings['name']) && in_array($field_type, ['code_html', 'code_css', 'code_js', 'code_json'], true)) {
                                 $file_name = "{$array_settings['name']}_{$repeater_identifier}_$field_name";
                                 $field_value = $arr_value['value'] ?? '';
-                                if ($field_type === 'code_html' || $field_type === 'code_json') {
-                                    $field_value = pom_framework_sanitize_defined_field($field_value, $field_definition, $settings_dir, $file_name);
-                                }
-
                                 $sanitized_array[$type][$index][$field_name]['value'] = POM_Framework_Disk::save_to_file($file_name, $field_value, str_replace('code_', '', $field_type), $settings_dir);
                             }
                             else {
@@ -483,6 +479,112 @@ if (!function_exists('sanitize_pom_framework_repeater')) {
         }
 
         return [];
+    }
+}
+
+if (!function_exists('pom_framework_sanitize_stored_value')) {
+    /**
+     * Normalize a persisted value without applying request-only transformations.
+     *
+     * Why: the public settings getter returns managed code paths and legacy
+     * repeater structures. Reusing save sanitizers while reading changed those
+     * contracts and could make frontend consumers lose otherwise valid data.
+     */
+    function pom_framework_sanitize_stored_value($value, string $type) {
+        $type = strtolower($type);
+
+        if ($type === 'repeater' || $type === 'font') {
+            return pom_framework_sanitize_stored_repeater($value);
+        }
+
+        $is_managed_path = false;
+        if (in_array($type, ['code_html', 'code_css', 'code_js', 'code_json', 'tinymce'], true)) {
+            if (method_exists(POM_Framework_Disk::class, 'is_managed_file_path')) {
+                $is_managed_path = POM_Framework_Disk::is_managed_file_path($value);
+            }
+            elseif (method_exists(POM_Framework_Disk::class, 'read_managed_file_path')) {
+                // Keep mixed Composer rollouts compatible with the immediately previous framework build.
+                $is_managed_path = POM_Framework_Disk::read_managed_file_path($value) !== null;
+            }
+        }
+
+        if ($is_managed_path) {
+            return (string) $value;
+        }
+
+        $sanitize_function_name = "sanitize_pom_framework_$type";
+
+        return function_exists($sanitize_function_name)
+            ? $sanitize_function_name($value)
+            : $value;
+    }
+}
+
+if (!function_exists('pom_framework_sanitize_stored_repeater')) {
+    /**
+     * Normalize an already persisted repeater without treating it as a save request.
+     *
+     * Why: legacy callers retrieve repeaters without passing their field schema. This
+     * read-only path preserves those stored values while the save sanitizer continues
+     * to require server-defined fields and never trusts browser-provided types.
+     */
+    function pom_framework_sanitize_stored_repeater($value): array {
+        if (is_string($value)) {
+            $value = json_decode(stripslashes($value), true);
+        }
+
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach ($value as $type => $items) {
+            $type = sanitize_key((string) $type);
+            if (!in_array($type, ['default', 'new'], true) || !is_array($items)) {
+                continue;
+            }
+
+            foreach ($items as $index => $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+
+                foreach ($item as $field_name => $field_value) {
+                    if ($field_name === 'repeater_identifier') {
+                        $sanitized[$type][$index][$field_name] = sanitize_pom_framework_text($field_value);
+                        continue;
+                    }
+
+                    if ($field_name === 'default_values') {
+                        $default_values = is_string($field_value) ? json_decode(stripslashes($field_value), true) : $field_value;
+                        $sanitized[$type][$index][$field_name] = is_array($default_values) ? $default_values : [];
+                        continue;
+                    }
+
+                    if (!is_array($field_value)) {
+                        continue;
+                    }
+
+                    $field_type = strtolower((string) ($field_value['type'] ?? ''));
+                    $sanitize_function_name = "sanitize_pom_framework_$field_type";
+                    if (
+                        $field_type === '' ||
+                        (!in_array($field_type, ['repeater', 'font'], true) && !function_exists($sanitize_function_name))
+                    ) {
+                        continue;
+                    }
+
+                    $sanitized_value = pom_framework_sanitize_stored_value($field_value['value'] ?? '', $field_type);
+                    $normalized_field_name = str_replace('[]', '', (string) $field_name);
+                    $sanitized[$type][$index][$normalized_field_name] = [
+                        'value' => $sanitized_value,
+                        'type' => $field_type,
+                    ];
+                }
+            }
+        }
+
+        return $sanitized;
     }
 }
 
@@ -550,11 +652,16 @@ if (!function_exists('pom_framework_get_font_field_definitions')) {
                         'type' => 'select',
                         'name' => 'font_weight',
                         'options' => [
+                            '100' => '100',
+                            '200' => '200',
                             'lighter' => 'Lighter',
                             '300' => '300',
                             '400' => '400',
+                            '500' => '500',
                             '600' => '600',
                             '700' => '700',
+                            '800' => '800',
+                            '900' => '900',
                             'bolder' => 'Bolder',
                         ],
                     ],
