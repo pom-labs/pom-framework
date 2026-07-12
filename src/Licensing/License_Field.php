@@ -212,24 +212,32 @@ class License_Field {
 			if ( '' === $license_key ) {
 				$notice = 'empty';
 			} else {
-				$stored = License_Registry::store_key( $product_slug, $license_key );
+				// Validate the candidate before replacing the stored key so a typo
+				// never destroys a previously working local connection.
+				$result = License_Client::validate( $product_slug, $license_key, true );
 
-				if ( is_wp_error( $stored ) ) {
-					$notice = 'error';
+				if ( empty( $result['valid'] ) ) {
+					$notice = 'invalid';
 				} else {
-					$result = License_Client::validate_and_cache( $product_slug, true );
-					$notice = ! empty( $result['valid'] ) ? 'valid' : 'invalid';
+					$stored = License_Registry::store_key( $product_slug, $license_key );
 
-					/**
-					 * Fires after a product license was saved and validated.
-					 *
-					 * Product adapters use this to complete migrations (e.g.
-					 * POM AI deletes its legacy key option).
-					 *
-					 * @param string               $product_slug Product slug.
-					 * @param array<string, mixed> $result       Validation result.
-					 */
-					do_action( 'pom_license_saved', $product_slug, $result );
+					if ( is_wp_error( $stored ) ) {
+						$notice = 'error';
+					} else {
+						License_Registry::store_validation( $product_slug, $result, (int) ( $result['cache_ttl'] ?? DAY_IN_SECONDS ) );
+						$notice = 'valid';
+
+						/**
+						 * Fires after a product license was saved and validated.
+						 *
+						 * Product adapters use this to complete migrations (e.g.
+						 * POM AI deletes its legacy key option).
+						 *
+						 * @param string               $product_slug Product slug.
+						 * @param array<string, mixed> $result       Validation result.
+						 */
+						do_action( 'pom_license_saved', $product_slug, $result );
+					}
 				}
 			}
 		} elseif ( 'validate' === $do ) {
@@ -239,7 +247,13 @@ class License_Field {
 			$license_key = License_Registry::get_key( $product_slug );
 
 			if ( null !== $license_key ) {
-				License_Client::deactivate_domain( $product_slug, $license_key );
+				$result = License_Client::deactivate_domain( $product_slug, $license_key );
+
+				if ( empty( $result['valid'] ) ) {
+					$notice = 'unlink_failed';
+					wp_safe_redirect( add_query_arg( 'pom_license_notice', $notice, $redirect ) );
+					exit;
+				}
 			}
 
 			License_Registry::forget( $product_slug );
@@ -255,7 +269,8 @@ class License_Field {
 			'valid'    => array( 'notice-success', __( 'License validated. This domain is authorized.', 'pom-framework' ) ),
 			'invalid'  => array( 'notice-error', __( 'The license could not be validated. Check the key, your subscription, and the authorized domains in My Account.', 'pom-framework' ) ),
 			'empty'    => array( 'notice-warning', __( 'Paste a license key before saving.', 'pom-framework' ) ),
-			'unlinked' => array( 'notice-info', __( 'The license was unlinked from this site.', 'pom-framework' ) ),
+			'unlinked'     => array( 'notice-info', __( 'The license was unlinked from this site.', 'pom-framework' ) ),
+			'unlink_failed' => array( 'notice-error', __( 'The license server could not deactivate this domain. The local key was kept so you can try again safely.', 'pom-framework' ) ),
 			'error'    => array( 'notice-error', __( 'The license could not be stored.', 'pom-framework' ) ),
 		);
 

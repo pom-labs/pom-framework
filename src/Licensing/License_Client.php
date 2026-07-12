@@ -100,6 +100,27 @@ class License_Client {
 	}
 
 	/**
+	 * Request licensed private-update metadata and a short-lived token.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public static function check_update( string $product_slug, string $license_key, string $artifact_type, string $artifact_slug, string $current_version ): array {
+		return self::post(
+			'/updates/check',
+			array_merge(
+				self::site_context(),
+				array(
+					'license_key'     => $license_key,
+					'product'         => $product_slug,
+					'artifact_type'   => $artifact_type,
+					'artifact_slug'   => $artifact_slug,
+					'current_version' => $current_version,
+				)
+			)
+		);
+	}
+
+	/**
 	 * Validate, cache the result in the shared registry, and return it.
 	 *
 	 * @return array<string, mixed>
@@ -161,14 +182,29 @@ class License_Client {
 	 * @return array<string, mixed>
 	 */
 	private static function post( string $route, array $payload ): array {
+		$body        = wp_json_encode( $payload );
+		$license_key = isset( $payload['license_key'] ) ? (string) $payload['license_key'] : '';
+		$headers     = array( 'Content-Type' => 'application/json' );
+
+		if ( '' !== $license_key ) {
+			$signed = self::signed_headers( 'POST', '/pom-lic/v2' . $route, (string) $body, $license_key, $headers );
+			if ( is_wp_error( $signed ) ) {
+				return array(
+					'valid'      => false,
+					'error_code' => 'signing_error',
+					'message'    => $signed->get_error_message(),
+				);
+			}
+
+			$headers = $signed;
+		}
+
 		$response = wp_remote_post(
 			self::api_base() . $route,
 			array(
 				'timeout' => 15,
-				'headers' => array(
-					'Content-Type' => 'application/json',
-				),
-				'body'    => wp_json_encode( $payload ),
+				'headers' => $headers,
+				'body'    => $body,
 			)
 		);
 
@@ -191,6 +227,31 @@ class License_Client {
 		}
 
 		return $data;
+	}
+
+	/**
+	 * Sign an exact HTTP body for a POM REST route.
+	 *
+	 * @param array<string, string> $headers Existing headers to preserve.
+	 * @return array<string, string>|\WP_Error
+	 */
+	public static function signed_headers( string $method, string $route, string $body, string $license_key, array $headers = array() ) {
+		try {
+			$nonce = rtrim( strtr( base64_encode( random_bytes( 24 ) ), '+/', '-_' ), '=' );
+		} catch ( \Throwable $exception ) {
+			return new \WP_Error( 'pom_license_signing_failed', 'The request nonce could not be generated.' );
+		}
+
+		$timestamp = (string) time();
+		$route     = '/' . ltrim( $route, '/' );
+		$base      = strtoupper( $method ) . "\n" . $route . "\n" . $timestamp . "\n" . $nonce . "\n" . hash( 'sha256', $body );
+
+		$headers['X-POM-License-Key'] = $license_key;
+		$headers['X-POM-Timestamp']   = $timestamp;
+		$headers['X-POM-Nonce']       = $nonce;
+		$headers['X-POM-Signature']   = hash_hmac( 'sha256', $base, $license_key );
+
+		return $headers;
 	}
 
 	/**

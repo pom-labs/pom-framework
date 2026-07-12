@@ -746,13 +746,15 @@ Storage contract consumers: `POM_Private_Updates` in POM Standard reads this reg
 
 ### License_Client
 
-HTTP wrapper for `pom-lic/v2`: `validate()`, `status()`, `deactivate_domain()`, `validate_and_cache()`, `cached_or_revalidate()`. The API base is filterable via `pom_license_api_base` for local/staging account servers.
+HTTP wrapper for `pom-lic/v2`: `validate()`, `status()`, `deactivate_domain()`, `check_update()`, `validate_and_cache()`, `cached_or_revalidate()`. Every request containing a license key is signed over its exact JSON body with `X-POM-Timestamp`, a random `X-POM-Nonce`, and `X-POM-Signature` (SHA-256 HMAC keyed by the license key). `signed_headers()` is public for product APIs such as POM AI that use the same transport contract. The API base is filterable via `pom_license_api_base` for local/staging account servers.
+
+`Private_Updater` is the licensed v2 compatibility fallback for an active product when the common POM Standard updater is unavailable. It exposes no metadata without a stored key, refreshes the one-time token at installation time, and verifies the package SHA-256. The common updater remains authoritative because it can discover inactive plugins/themes.
 
 Grace behavior: a `network_error` (account outage) keeps the previously cached valid state while `grace_until` (7 days after the last valid check) has not passed; deterministic failures (invalid key, revoked, expired, product mismatch) clear grace immediately.
 
 ### License_Field and the License settings tab
 
-`License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). Multisite keys can only be changed by network administrators; site administrators see masked status only.
+`License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). A replacement candidate is validated before it overwrites the working key, and unlink keeps the local key unless remote deactivation succeeds. Multisite keys can only be changed by network administrators; site administrators see masked status only.
 
 Products never register their own license submenu. Instead they add a "License" section to their existing framework settings page through their settings filter:
 
