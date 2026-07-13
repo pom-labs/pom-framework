@@ -192,7 +192,10 @@ class Private_Updater {
 
 	/** @return array<string, mixed> */
 	private static function check( string $type, string $artifact, array $config, string $version ): array {
-		$key = License_Registry::get_key( $config['product'] );
+		// Updates always use the network-scoped key on multisite; blog-scoped
+		// service keys (POM AI on subsites) never enter update payloads.
+		$scope = is_multisite() ? License_Registry::SCOPE_NETWORK : License_Registry::SCOPE_SITE;
+		$key   = License_Registry::get_key( $config['product'], $scope );
 
 		return null === $key ? array() : License_Client::check_update( $config['product'], $key, $type, $artifact, $version );
 	}

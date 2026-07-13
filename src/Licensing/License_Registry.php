@@ -8,6 +8,12 @@
  * key while target plugins are inactive. One product license applies to one
  * WordPress network.
  *
+ * Service-scoped exception (POM AI): on multisite, subsites may store their
+ * own blog-scoped license in a per-blog non-autoloaded option with the same
+ * name. Service operations (AI requests, credits) resolve blog first and fall
+ * back to the network entry; updates always use the network entry only, so
+ * the common updater and its read-only registry reader never see blog keys.
+ *
  * Key material is encrypted with a key derived from WordPress salts through a
  * versioned KDF. If salts change and decryption fails, the entry requires
  * reconnection; ciphertext is never logged or exposed.
@@ -22,27 +28,95 @@ class License_Registry {
 	const KDF_VERSION    = 'v1';
 
 	/**
-	 * Read the full registry.
-	 *
-	 * @return array<string, array<string, mixed>>
+	 * Registry scopes. SCOPE_BLOG exists only on multisite and only for
+	 * service-scoped products.
 	 */
-	public static function all(): array {
-		if ( is_multisite() ) {
-			$registry = get_site_option( self::OPTION_NAME, array() );
-		} else {
-			$registry = get_option( self::OPTION_NAME, array() );
-		}
+	const SCOPE_SITE    = 'site';
+	const SCOPE_NETWORK = 'network';
+	const SCOPE_BLOG    = 'blog';
 
-		return is_array( $registry ) ? $registry : array();
+	/**
+	 * Products whose service license is blog-scoped on multisite: each
+	 * subsite (which may belong to a third party) can store its own key and
+	 * consume its own credits, while plugin updates keep using the
+	 * network-scoped entry managed from the network's main site.
+	 */
+	const SERVICE_SCOPED_PRODUCTS = array( 'pom-ai' );
+
+	/**
+	 * Whether a product's service license is per-blog on multisite.
+	 */
+	public static function is_service_scoped( string $product_slug ): bool {
+		return in_array( $product_slug, self::SERVICE_SCOPED_PRODUCTS, true );
 	}
 
 	/**
-	 * Read one product entry.
+	 * The scope where this product's license is MANAGED on the current site.
+	 *
+	 * Single site: 'site'. Multisite: 'network', except service-scoped
+	 * products on a subsite, which manage their own 'blog' entry. The main
+	 * site manages the network entry (it doubles as its service license).
+	 */
+	public static function management_scope( string $product_slug ): string {
+		if ( ! is_multisite() ) {
+			return self::SCOPE_SITE;
+		}
+
+		if ( self::is_service_scoped( $product_slug ) && ! is_main_site() ) {
+			return self::SCOPE_BLOG;
+		}
+
+		return self::SCOPE_NETWORK;
+	}
+
+	/**
+	 * The scope whose key actually serves this product on the current site.
+	 *
+	 * Blog-managed products fall back to the network entry when the subsite
+	 * has not stored its own key, so existing network-licensed setups keep
+	 * working without action.
+	 */
+	public static function effective_scope( string $product_slug ): string {
+		$scope = self::management_scope( $product_slug );
+
+		if ( self::SCOPE_BLOG === $scope ) {
+			$registry = self::read( self::SCOPE_BLOG );
+
+			if ( isset( $registry[ $product_slug ] ) && is_array( $registry[ $product_slug ] ) ) {
+				return self::SCOPE_BLOG;
+			}
+
+			return self::SCOPE_NETWORK;
+		}
+
+		return $scope;
+	}
+
+	/**
+	 * Read the full registry for one scope.
+	 *
+	 * The default scope is the network registry on multisite (what updaters
+	 * read) and the site registry on single site.
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	public static function all( string $scope = '' ): array {
+		if ( '' === $scope ) {
+			$scope = is_multisite() ? self::SCOPE_NETWORK : self::SCOPE_SITE;
+		}
+
+		return self::read( $scope );
+	}
+
+	/**
+	 * Read one product entry. Empty scope resolves blog-first with network
+	 * fallback for service-scoped products.
 	 *
 	 * @return array<string, mixed>|null
 	 */
-	public static function get( string $product_slug ): ?array {
-		$registry = self::all();
+	public static function get( string $product_slug, string $scope = '' ): ?array {
+		$scope    = '' !== $scope ? $scope : self::effective_scope( $product_slug );
+		$registry = self::read( $scope );
 
 		return isset( $registry[ $product_slug ] ) && is_array( $registry[ $product_slug ] ) ? $registry[ $product_slug ] : null;
 	}
@@ -50,16 +124,20 @@ class License_Registry {
 	/**
 	 * Store a license key for a product.
 	 *
+	 * Writes default to the management scope: a subsite storing a
+	 * service-scoped key never touches the network registry.
+	 *
 	 * @return bool|\WP_Error
 	 */
-	public static function store_key( string $product_slug, string $license_key ) {
+	public static function store_key( string $product_slug, string $license_key, string $scope = '' ) {
+		$scope     = '' !== $scope ? $scope : self::management_scope( $product_slug );
 		$encrypted = self::encrypt( $license_key );
 
 		if ( is_wp_error( $encrypted ) ) {
 			return $encrypted;
 		}
 
-		$registry = self::all();
+		$registry = self::read( $scope );
 
 		$existing = isset( $registry[ $product_slug ] ) && is_array( $registry[ $product_slug ] ) ? $registry[ $product_slug ] : array();
 
@@ -77,7 +155,7 @@ class License_Registry {
 			)
 		);
 
-		return self::persist( $registry );
+		return self::persist( $registry, $scope );
 	}
 
 	/**
@@ -85,8 +163,8 @@ class License_Registry {
 	 *
 	 * @return string|null Null when absent or undecryptable (reconnect needed).
 	 */
-	public static function get_key( string $product_slug ): ?string {
-		$entry = self::get( $product_slug );
+	public static function get_key( string $product_slug, string $scope = '' ): ?string {
+		$entry = self::get( $product_slug, $scope );
 
 		if ( null === $entry || empty( $entry['key_cipher'] ) || empty( $entry['key_nonce'] ) ) {
 			return null;
@@ -100,23 +178,27 @@ class License_Registry {
 	/**
 	 * Whether the entry exists but can no longer be decrypted (salts changed).
 	 */
-	public static function needs_reconnect( string $product_slug ): bool {
-		$entry = self::get( $product_slug );
+	public static function needs_reconnect( string $product_slug, string $scope = '' ): bool {
+		$entry = self::get( $product_slug, $scope );
 
 		if ( null === $entry || empty( $entry['key_cipher'] ) ) {
 			return false;
 		}
 
-		return null === self::get_key( $product_slug );
+		return null === self::get_key( $product_slug, $scope );
 	}
 
 	/**
 	 * Cache the last validation result for a product.
 	 *
+	 * The cache is stored next to the key that produced it (effective scope),
+	 * so a subsite's own validation never overwrites the network entry.
+	 *
 	 * @param array<string, mixed> $result Sanitized validation payload.
 	 */
-	public static function store_validation( string $product_slug, array $result, int $cache_ttl = DAY_IN_SECONDS ): void {
-		$registry = self::all();
+	public static function store_validation( string $product_slug, array $result, int $cache_ttl = DAY_IN_SECONDS, string $scope = '' ): void {
+		$scope    = '' !== $scope ? $scope : self::effective_scope( $product_slug );
+		$registry = self::read( $scope );
 
 		if ( ! isset( $registry[ $product_slug ] ) || ! is_array( $registry[ $product_slug ] ) ) {
 			return;
@@ -144,7 +226,7 @@ class License_Registry {
 			$registry[ $product_slug ]['grace_until'] = 0;
 		}
 
-		self::persist( $registry );
+		self::persist( $registry, $scope );
 	}
 
 	/**
@@ -152,8 +234,8 @@ class License_Registry {
 	 *
 	 * @return array<string, mixed>|null
 	 */
-	public static function get_validation( string $product_slug ): ?array {
-		$entry = self::get( $product_slug );
+	public static function get_validation( string $product_slug, string $scope = '' ): ?array {
+		$entry = self::get( $product_slug, $scope );
 
 		return null !== $entry && isset( $entry['last_validation'] ) && is_array( $entry['last_validation'] ) ? $entry['last_validation'] : null;
 	}
@@ -161,8 +243,8 @@ class License_Registry {
 	/**
 	 * Whether the cached state is still usable during an account outage.
 	 */
-	public static function in_grace( string $product_slug ): bool {
-		$entry = self::get( $product_slug );
+	public static function in_grace( string $product_slug, string $scope = '' ): bool {
+		$entry = self::get( $product_slug, $scope );
 
 		if ( null === $entry ) {
 			return false;
@@ -178,18 +260,21 @@ class License_Registry {
 	}
 
 	/**
-	 * Remove a product entry (unlink).
+	 * Remove a product entry (unlink) from its management scope.
 	 */
-	public static function forget( string $product_slug ): void {
-		$registry = self::all();
+	public static function forget( string $product_slug, string $scope = '' ): void {
+		$scope    = '' !== $scope ? $scope : self::management_scope( $product_slug );
+		$registry = self::read( $scope );
 
 		unset( $registry[ $product_slug ] );
 
-		self::persist( $registry );
+		self::persist( $registry, $scope );
 	}
 
 	/**
 	 * The stable random network/site UUID sent with multisite payloads.
+	 *
+	 * Always network-level: blog-scoped entries share the network UUID.
 	 */
 	public static function ensure_network_uuid(): string {
 		$registry = self::all();
@@ -231,10 +316,24 @@ class License_Registry {
 	}
 
 	/**
+	 * @return array<string, array<string, mixed>>
+	 */
+	private static function read( string $scope ): array {
+		if ( self::SCOPE_NETWORK === $scope ) {
+			$registry = get_site_option( self::OPTION_NAME, array() );
+		} else {
+			// 'blog' and 'site' both live in the current blog's options table.
+			$registry = get_option( self::OPTION_NAME, array() );
+		}
+
+		return is_array( $registry ) ? $registry : array();
+	}
+
+	/**
 	 * @param array<string, array<string, mixed>> $registry Registry payload.
 	 */
-	private static function persist( array $registry ): bool {
-		if ( is_multisite() ) {
+	private static function persist( array $registry, string $scope ): bool {
+		if ( self::SCOPE_NETWORK === $scope ) {
 			update_site_option( self::OPTION_NAME, $registry );
 
 			return true;

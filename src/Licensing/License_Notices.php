@@ -12,6 +12,12 @@
  *   license silences every subsite. When something IS missing, only network
  *   administrators see it, and only in the network admin or on the main
  *   site — subsite screens stay clean because subsite admins cannot fix it.
+ * - Exception: service-scoped products (POM AI) also have a per-blog license
+ *   on subsites. A subsite administrator sees a notice on their own site
+ *   only when their blog-scoped entry needs action, or when neither a blog
+ *   key nor a network key exists at all. A subsite silently covered by the
+ *   network license never nags, and network-key problems remain visible
+ *   only to network administrators on the main site.
  * - Only deterministic failures (missing key, undecryptable key, invalid /
  *   expired / revoked / product mismatch) trigger the notice; transient
  *   network errors never do.
@@ -66,15 +72,19 @@ class License_Notices {
 	}
 
 	public static function render(): void {
-		if ( ! self::should_render_here() ) {
-			return;
-		}
+		$subsite_screen = is_multisite() && ! is_network_admin() && ! is_main_site();
 
 		$missing = array();
 		$invalid = array();
 
 		foreach ( self::$products as $slug => $info ) {
-			$state = self::product_state( $slug );
+			$blog_scoped_here = $subsite_screen && License_Registry::is_service_scoped( $slug );
+
+			if ( ! self::current_user_can_see( $blog_scoped_here, $subsite_screen ) ) {
+				continue;
+			}
+
+			$state = $blog_scoped_here ? self::blog_product_state( $slug ) : self::product_state( $slug );
 
 			if ( 'missing' === $state ) {
 				$missing[ $slug ] = $info;
@@ -97,7 +107,7 @@ class License_Notices {
 				/* translators: 1: product name, 2: settings URL. */
 				__( '%1$s has no license key yet (<a href="%2$s">add it here</a>)', 'pom-framework' ),
 				esc_html( $info['label'] ),
-				esc_url( self::settings_url( $info['url'] ) )
+				esc_url( self::settings_url( $info['url'], $subsite_screen ) )
 			);
 		}
 
@@ -106,7 +116,7 @@ class License_Notices {
 				/* translators: 1: product name, 2: settings URL. */
 				__( 'the %1$s license needs attention (<a href="%2$s">review it here</a>)', 'pom-framework' ),
 				esc_html( $info['label'] ),
-				esc_url( self::settings_url( $info['url'] ) )
+				esc_url( self::settings_url( $info['url'], $subsite_screen ) )
 			);
 		}
 
@@ -117,42 +127,55 @@ class License_Notices {
 			)
 		);
 
-		echo ' ' . esc_html__( 'Without a valid license the product does not receive private updates.', 'pom-framework' );
+		if ( $subsite_screen ) {
+			// Subsite notices only ever contain blog-scoped service products.
+			echo ' ' . esc_html__( 'Without a valid license this site cannot use the product’s services or credits. Plugin updates are managed from the network’s main site.', 'pom-framework' );
+		} else {
+			echo ' ' . esc_html__( 'Without a valid license the product does not receive private updates.', 'pom-framework' );
+		}
+
 		echo '</p></div>';
 	}
 
 	/**
-	 * Whether the current screen/user combination should ever see the notice.
+	 * Whether the current user may see a notice for this product on this screen.
 	 */
-	private static function should_render_here(): bool {
-		if ( is_multisite() ) {
-			// Only the people who can actually fix a network license, and never
-			// on subsite screens: paying subsites must not be nagged.
-			if ( ! current_user_can( 'manage_network_options' ) ) {
-				return false;
-			}
-
-			return is_network_admin() || is_main_site();
+	private static function current_user_can_see( bool $blog_scoped_here, bool $subsite_screen ): bool {
+		if ( ! is_multisite() ) {
+			return current_user_can( 'manage_options' );
 		}
 
-		return current_user_can( 'manage_options' );
+		if ( $blog_scoped_here ) {
+			// The subsite's own administrators can fix their blog-scoped key.
+			return current_user_can( 'manage_options' );
+		}
+
+		// Network-scoped products: only the people who can fix a network
+		// license, and never on subsite screens.
+		if ( $subsite_screen || ! current_user_can( 'manage_network_options' ) ) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
+	 * State of a network/site-scoped product entry.
+	 *
 	 * @return string 'ok' | 'missing' | 'invalid'
 	 */
-	private static function product_state( string $product_slug ): string {
-		$entry = License_Registry::get( $product_slug );
+	private static function product_state( string $product_slug, string $scope = '' ): string {
+		$entry = License_Registry::get( $product_slug, $scope );
 
 		if ( null === $entry || empty( $entry['key_cipher'] ) ) {
 			return 'missing';
 		}
 
-		if ( License_Registry::needs_reconnect( $product_slug ) ) {
+		if ( License_Registry::needs_reconnect( $product_slug, $scope ) ) {
 			return 'invalid';
 		}
 
-		$validation = License_Registry::get_validation( $product_slug );
+		$validation = License_Registry::get_validation( $product_slug, $scope );
 
 		if ( ! is_array( $validation ) ) {
 			// Key stored but never validated (save validates immediately, so
@@ -164,7 +187,7 @@ class License_Notices {
 			return 'ok';
 		}
 
-		if ( License_Registry::in_grace( $product_slug ) ) {
+		if ( License_Registry::in_grace( $product_slug, $scope ) ) {
 			// Account outage with previously valid state: no nagging.
 			return 'ok';
 		}
@@ -175,11 +198,31 @@ class License_Notices {
 	}
 
 	/**
-	 * Resolve the license tab URL; on multisite the tabs live on the main
-	 * site, which is also the only place the notice renders.
+	 * State of a blog-scoped service product on a subsite screen.
+	 *
+	 * @return string 'ok' | 'missing' | 'invalid'
 	 */
-	private static function settings_url( string $settings_path ): string {
-		if ( is_multisite() ) {
+	private static function blog_product_state( string $product_slug ): string {
+		$entry = License_Registry::get( $product_slug, License_Registry::SCOPE_BLOG );
+
+		if ( null === $entry || empty( $entry['key_cipher'] ) ) {
+			// No site license: silent while the network license exists (the
+			// service falls back to it); 'missing' only when there is nothing
+			// to fall back on and the subsite admin is the one who can act.
+			$network = License_Registry::get( $product_slug, License_Registry::SCOPE_NETWORK );
+
+			return null !== $network && ! empty( $network['key_cipher'] ) ? 'ok' : 'missing';
+		}
+
+		return self::product_state( $product_slug, License_Registry::SCOPE_BLOG );
+	}
+
+	/**
+	 * Resolve the license tab URL. Network-scoped tabs live on the main
+	 * site; blog-scoped service tabs live on the subsite being viewed.
+	 */
+	private static function settings_url( string $settings_path, bool $subsite_screen = false ): string {
+		if ( is_multisite() && ! $subsite_screen ) {
 			return get_admin_url( get_main_site_id(), $settings_path );
 		}
 

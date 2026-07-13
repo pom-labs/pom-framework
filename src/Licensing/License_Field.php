@@ -6,6 +6,11 @@
  * validate / reconnect / unlink actions) and processes its admin-post
  * actions. Product adapters only supply their canonical slug and where to
  * render; they never invent product-specific key options.
+ *
+ * Scope: the field always manages the product's management scope. On a
+ * multisite subsite a service-scoped product (POM AI) manages the subsite's
+ * own blog entry — site administrators may edit it — while every other
+ * product manages the network entry and stays network-admin only.
  */
 
 namespace POMFramework\Licensing;
@@ -64,14 +69,31 @@ class License_Field {
 			'description'     => '',
 			'settings'        => array(),
 			'render_callback' => static function () use ( $product_slug, $product_label, $args ): void {
-				$defaults = array(
-					'title'       => sprintf( '%s license', $product_label ),
-					'description' => sprintf(
-						/* translators: %s: product name. */
-						__( 'Paste the %s license key from account.pom.es (My Account > Licenses & Downloads). The license authorizes this domain, private downloads, and automatic updates.', 'pom-framework' ),
-						$product_label
-					),
-				);
+				if ( License_Registry::SCOPE_BLOG === License_Registry::management_scope( $product_slug ) ) {
+					$defaults = array(
+						'title'       => sprintf(
+							/* translators: %s: product name. */
+							__( '%s license for this site', 'pom-framework' ),
+							$product_label
+						),
+						'description' => sprintf(
+							/* translators: %s: product name. */
+							__( 'This license authorizes %s services and credits for this site only. Plugin updates are managed separately from the multisite network’s main site.', 'pom-framework' ),
+							$product_label
+						),
+					);
+				} else {
+					$defaults = array(
+						'title'       => sprintf( '%s license', $product_label ),
+						'description' => sprintf(
+							/* translators: %s: product name. */
+							__( 'Paste the %s license key from account.pom.es (My Account > Licenses & Downloads). The license authorizes this domain, private downloads, and automatic updates.', 'pom-framework' ),
+							$product_label
+						),
+					);
+				}
+
+				$defaults['label'] = $product_label;
 
 				self::render( $product_slug, array_merge( $defaults, $args ) );
 			},
@@ -81,27 +103,39 @@ class License_Field {
 	/**
 	 * Whether the current user may manage this product's license.
 	 *
-	 * Multisite keys are network-scoped: only network administrators may
-	 * change them. Site administrators see masked status only.
+	 * Network-scoped keys require a network administrator; blog-scoped
+	 * service keys (POM AI on a subsite) belong to that site's own
+	 * administrators, who may be third parties.
 	 */
-	public static function current_user_can_manage(): bool {
-		return is_multisite() ? current_user_can( 'manage_network_options' ) : current_user_can( 'manage_options' );
+	public static function current_user_can_manage( string $product_slug = '' ): bool {
+		if ( ! is_multisite() ) {
+			return current_user_can( 'manage_options' );
+		}
+
+		if ( '' !== $product_slug && License_Registry::SCOPE_BLOG === License_Registry::management_scope( $product_slug ) ) {
+			return current_user_can( 'manage_options' );
+		}
+
+		return current_user_can( 'manage_network_options' );
 	}
 
 	/**
 	 * Render the license panel for a product.
 	 *
-	 * @param array<string, mixed> $args title, description, redirect (return URL).
+	 * @param array<string, mixed> $args title, description, label, redirect (return URL).
 	 */
 	public static function render( string $product_slug, array $args = array() ): void {
 		self::boot();
 
-		$entry      = License_Registry::get( $product_slug );
-		$validation = License_Registry::get_validation( $product_slug );
-		$reconnect  = License_Registry::needs_reconnect( $product_slug );
-		$can_manage = self::current_user_can_manage();
+		$scope      = License_Registry::management_scope( $product_slug );
+		$blog_scope = License_Registry::SCOPE_BLOG === $scope;
+		$entry      = License_Registry::get( $product_slug, $scope );
+		$validation = License_Registry::get_validation( $product_slug, $scope );
+		$reconnect  = License_Registry::needs_reconnect( $product_slug, $scope );
+		$can_manage = self::current_user_can_manage( $product_slug );
 		$redirect   = isset( $args['redirect'] ) ? (string) $args['redirect'] : ( isset( $_SERVER['REQUEST_URI'] ) ? esc_url_raw( wp_unslash( $_SERVER['REQUEST_URI'] ) ) : admin_url() );
 		$title      = isset( $args['title'] ) ? (string) $args['title'] : __( 'Product license', 'pom-framework' );
+		$label      = isset( $args['label'] ) ? (string) $args['label'] : $product_slug;
 
 		if ( isset( $_GET['pom_license_notice'] ) ) {
 			self::render_notice( sanitize_key( wp_unslash( $_GET['pom_license_notice'] ) ) );
@@ -113,6 +147,30 @@ class License_Field {
 
 			<?php if ( ! empty( $args['description'] ) ) : ?>
 				<p class="description"><?php echo esc_html( (string) $args['description'] ); ?></p>
+			<?php endif; ?>
+
+			<?php if ( $blog_scope ) : ?>
+				<p class="description" style="border-left:4px solid #72aee6;padding:6px 10px;background:#f0f6fc;">
+					<?php
+					printf(
+						/* translators: %s: product name. */
+						esc_html__( 'Automatic plugin updates require %s to be active and licensed on the network’s main site. This does not affect the AI credits assigned to this site.', 'pom-framework' ),
+						esc_html( $label )
+					);
+					?>
+				</p>
+
+				<?php if ( null === $entry && null !== License_Registry::get_key( $product_slug, License_Registry::SCOPE_NETWORK ) ) : ?>
+					<p class="description">
+						<?php
+						printf(
+							/* translators: %s: product name. */
+							esc_html__( 'No license is stored for this site yet. Requests from this site currently use the network’s %s license and its credits.', 'pom-framework' ),
+							esc_html( $label )
+						);
+						?>
+					</p>
+				<?php endif; ?>
 			<?php endif; ?>
 
 			<?php if ( $reconnect ) : ?>
@@ -146,7 +204,15 @@ class License_Field {
 			<?php endif; ?>
 
 			<?php if ( ! $can_manage ) : ?>
-				<p class="description"><?php esc_html_e( 'Only network administrators can change this license.', 'pom-framework' ); ?></p>
+				<p class="description">
+					<?php
+					if ( $blog_scope ) {
+						esc_html_e( 'Only administrators of this site can change this license.', 'pom-framework' );
+					} else {
+						esc_html_e( 'Only network administrators can change this license.', 'pom-framework' );
+					}
+					?>
+				</p>
 			<?php else : ?>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-bottom:8px;">
 					<input type="hidden" name="action" value="pom_license_field_action">
@@ -187,6 +253,10 @@ class License_Field {
 
 	/**
 	 * Process save / validate / unlink actions.
+	 *
+	 * Every action is pinned to the product's management scope: a subsite
+	 * request can only ever create, revalidate, or remove the subsite's own
+	 * blog entry, never the network key it may be falling back to.
 	 */
 	public static function handle_action(): void {
 		$product_slug = isset( $_POST['product'] ) ? sanitize_key( wp_unslash( $_POST['product'] ) ) : '';
@@ -200,10 +270,11 @@ class License_Field {
 
 		check_admin_referer( 'pom_license_field_' . $product_slug );
 
-		if ( ! self::current_user_can_manage() ) {
+		if ( ! self::current_user_can_manage( $product_slug ) ) {
 			wp_die( esc_html__( 'You are not allowed to manage this license.', 'pom-framework' ) );
 		}
 
+		$scope  = License_Registry::management_scope( $product_slug );
 		$notice = 'error';
 
 		if ( 'save' === $do ) {
@@ -219,12 +290,12 @@ class License_Field {
 				if ( empty( $result['valid'] ) ) {
 					$notice = 'invalid';
 				} else {
-					$stored = License_Registry::store_key( $product_slug, $license_key );
+					$stored = License_Registry::store_key( $product_slug, $license_key, $scope );
 
 					if ( is_wp_error( $stored ) ) {
 						$notice = 'error';
 					} else {
-						License_Registry::store_validation( $product_slug, $result, (int) ( $result['cache_ttl'] ?? DAY_IN_SECONDS ) );
+						License_Registry::store_validation( $product_slug, $result, (int) ( $result['cache_ttl'] ?? DAY_IN_SECONDS ), $scope );
 						$notice = 'valid';
 
 						/**
@@ -241,10 +312,21 @@ class License_Field {
 				}
 			}
 		} elseif ( 'validate' === $do ) {
-			$result = License_Client::validate_and_cache( $product_slug, true );
-			$notice = ! empty( $result['valid'] ) ? 'valid' : 'invalid';
+			$license_key = License_Registry::get_key( $product_slug, $scope );
+
+			if ( null === $license_key ) {
+				$notice = 'invalid';
+			} else {
+				$result = License_Client::validate( $product_slug, $license_key, true );
+
+				if ( 'network_error' !== ( $result['error_code'] ?? '' ) ) {
+					License_Registry::store_validation( $product_slug, $result, (int) ( $result['cache_ttl'] ?? DAY_IN_SECONDS ), $scope );
+				}
+
+				$notice = ! empty( $result['valid'] ) ? 'valid' : 'invalid';
+			}
 		} elseif ( 'unlink' === $do ) {
-			$license_key = License_Registry::get_key( $product_slug );
+			$license_key = License_Registry::get_key( $product_slug, $scope );
 
 			if ( null !== $license_key ) {
 				$result = License_Client::deactivate_domain( $product_slug, $license_key );
@@ -256,7 +338,7 @@ class License_Field {
 				}
 			}
 
-			License_Registry::forget( $product_slug );
+			License_Registry::forget( $product_slug, $scope );
 			$notice = 'unlinked';
 		}
 

@@ -744,6 +744,28 @@ One registry option `pom_product_licenses` keyed by canonical product slug:
 
 Storage contract consumers: `POM_Private_Updates` in POM Standard reads this registry through its own minimal reader (`plugins/pom-pomstandard/includes/license-registry-reader.php`). Any change to the option name, entry schema, KDF, or envelope must update both sides and bump the version markers.
 
+#### Service-scoped products (POM AI) and multisite scopes
+
+`License_Registry::SERVICE_SCOPED_PRODUCTS` (currently only `pom-ai`) marks products whose *service* license is per-blog on multisite: subsites — which may belong to third parties — store their own key in a per-blog non-autoloaded option with the same `pom_product_licenses` name, and consume their own credits for that site only. Plugin updates always use the network entry, so a subsite-only license never grants updates.
+
+Three scopes exist (`SCOPE_SITE`, `SCOPE_NETWORK`, `SCOPE_BLOG`), and two resolvers:
+
+- `management_scope( $slug )` — where the license is *edited* on the current site: `site` on single site; `network` on multisite (including the main site, whose network entry doubles as its own service license); `blog` only for service-scoped products on a subsite.
+- `effective_scope( $slug )` — where the key that *serves* the product lives: same as the management scope, except a subsite without its own blog entry falls back to `network`, so existing network-licensed setups keep working without action.
+
+Every registry method (`get`, `get_key`, `store_key`, `store_validation`, `get_validation`, `needs_reconnect`, `in_grace`, `forget`) accepts an optional trailing `$scope`; empty means reads resolve through `effective_scope()` and writes through `management_scope()`. A subsite write can therefore never touch the network entry, and a subsite's validation cache lands in its own blog entry. `POMFramework\Licensing\Private_Updater` and the POM Standard registry reader pin update-key reads to `SCOPE_NETWORK` explicitly.
+
+The resulting behavior for POM AI:
+
+| Case | Update license | AI service license & credits |
+| --- | --- | --- |
+| Normal WordPress | The site's license | The same license |
+| Multisite, network-active | Main site / network entry | One per subsite (network fallback when a subsite stores no key) |
+| Multisite, active on main site + subsites | Main site / network entry | One per site |
+| Multisite, active only on a subsite | No updates (no network entry) | The subsite's own license and credits |
+
+Products that consume another product's service key (POM Translate machine translation calls `License_Registry::get_key( 'pom-ai' )`) automatically use the current subsite's key through the same resolution.
+
 ### License_Client
 
 HTTP wrapper for `pom-lic/v2`: `validate()`, `status()`, `deactivate_domain()`, `check_update()`, `validate_and_cache()`, `cached_or_revalidate()`. Every request containing a license key is signed over its exact JSON body with `X-POM-Timestamp`, a random `X-POM-Nonce`, and `X-POM-Signature` (SHA-256 HMAC keyed by the license key). `signed_headers()` is public for product APIs such as POM AI that use the same transport contract. The API base is filterable via `pom_license_api_base` for local/staging account servers.
@@ -754,7 +776,9 @@ Grace behavior: a `network_error` (account outage) keeps the previously cached v
 
 ### License_Field and the License settings tab
 
-`License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). A replacement candidate is validated before it overwrites the working key, and unlink keeps the local key unless remote deactivation succeeds. Multisite keys can only be changed by network administrators; site administrators see masked status only.
+`License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). A replacement candidate is validated before it overwrites the working key, and unlink keeps the local key unless remote deactivation succeeds. Multisite keys can only be changed by network administrators; site administrators see masked status only — except blog-scoped service products (POM AI) on a subsite, where the field manages the subsite's own entry and that site's administrators (`manage_options`) may edit it.
+
+On a subsite, the field for a service-scoped product automatically switches to the site-license presentation: title "*<Product> license for this site*", description "*This license authorizes <Product> services and credits for this site only. Plugin updates are managed separately from the multisite network's main site.*", plus a permanent info note "*Automatic plugin updates require <Product> to be active and licensed on the network's main site. This does not affect the AI credits assigned to this site.*". When the subsite has no key yet but the network does, the field states that requests currently use the network license and its credits. All actions (save, revalidate, unlink) are pinned server-side to the management scope, so a subsite form can never revalidate or unlink the network key it may be falling back to.
 
 Products never register their own license submenu. Instead they add a "License" section to their existing framework settings page through their settings filter:
 
@@ -796,6 +820,13 @@ respects the network-scoped registry: a valid network license silences every
 subsite, and when something is missing only users with
 `manage_network_options` see it, and only in the network admin or on the main
 site — subsite screens always stay clean.
+
+Blog-scoped service products (POM AI) are the exception on subsite screens:
+that site's own administrators see a notice when their blog-scoped entry
+needs action, or when neither a blog key nor a network key exists at all. A
+subsite silently covered by the network license never nags, the notice links
+to the subsite's own license tab, and its closing line explains that services
+and credits — not updates — are what the site license controls.
 
 The shared client also reports `multisite: '1'` to account.pom.es on every
 call; the server rejects update checks from multisite installs whose plan
