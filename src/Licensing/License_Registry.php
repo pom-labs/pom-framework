@@ -8,10 +8,10 @@
  * key while target plugins are inactive. One product license applies to one
  * WordPress network.
  *
- * Service-scoped exception (POM AI): on multisite, subsites may store their
- * own blog-scoped license in a per-blog non-autoloaded option with the same
- * name. Service operations (AI requests, credits) resolve blog first and fall
- * back to the network entry; updates always use the network entry only, so
+ * Service-scoped exception (POM AI): on multisite, subsites store their own
+ * blog-scoped license in a per-blog non-autoloaded option with the same name.
+ * Service operations (AI requests and credits) require that blog entry and do
+ * not inherit the network entry. Updates always use the network entry only, so
  * the common updater and its read-only registry reader never see blog keys.
  *
  * Key material is encrypted with a key derived from WordPress salts through a
@@ -72,24 +72,12 @@ class License_Registry {
 	/**
 	 * The scope whose key actually serves this product on the current site.
 	 *
-	 * Blog-managed products fall back to the network entry when the subsite
-	 * has not stored its own key, so existing network-licensed setups keep
-	 * working without action.
+	 * Service-scoped products deliberately stay in the blog scope on a
+	 * multisite subsite. Requiring an explicit local key prevents a network
+	 * license from silently granting account-backed services to third parties.
 	 */
 	public static function effective_scope( string $product_slug ): string {
-		$scope = self::management_scope( $product_slug );
-
-		if ( self::SCOPE_BLOG === $scope ) {
-			$registry = self::read( self::SCOPE_BLOG );
-
-			if ( isset( $registry[ $product_slug ] ) && is_array( $registry[ $product_slug ] ) ) {
-				return self::SCOPE_BLOG;
-			}
-
-			return self::SCOPE_NETWORK;
-		}
-
-		return $scope;
+		return self::management_scope( $product_slug );
 	}
 
 	/**
@@ -109,8 +97,8 @@ class License_Registry {
 	}
 
 	/**
-	 * Read one product entry. Empty scope resolves blog-first with network
-	 * fallback for service-scoped products.
+	 * Read one product entry. Empty scope resolves to the current product's
+	 * effective scope; service-scoped subsite reads never inherit network keys.
 	 *
 	 * @return array<string, mixed>|null
 	 */

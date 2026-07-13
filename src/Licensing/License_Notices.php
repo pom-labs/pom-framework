@@ -12,12 +12,10 @@
  *   license silences every subsite. When something IS missing, only network
  *   administrators see it, and only in the network admin or on the main
  *   site — subsite screens stay clean because subsite admins cannot fix it.
- * - Exception: service-scoped products (POM AI) also have a per-blog license
- *   on subsites. A subsite administrator sees a notice on their own site
- *   only when their blog-scoped entry needs action, or when neither a blog
- *   key nor a network key exists at all. A subsite silently covered by the
- *   network license never nags, and network-key problems remain visible
- *   only to network administrators on the main site.
+ * - Exception: service-scoped products (POM AI) require a per-blog license on
+ *   subsites. A subsite administrator sees a notice on their own site whenever
+ *   that blog-scoped entry is missing or needs action. The network entry is
+ *   reserved for plugin updates and never grants services to the subsite.
  * - Only deterministic failures (missing key, undecryptable key, invalid /
  *   expired / revoked / product mismatch) trigger the notice; transient
  *   network errors never do.
@@ -206,12 +204,7 @@ class License_Notices {
 		$entry = License_Registry::get( $product_slug, License_Registry::SCOPE_BLOG );
 
 		if ( null === $entry || empty( $entry['key_cipher'] ) ) {
-			// No site license: silent while the network license exists (the
-			// service falls back to it); 'missing' only when there is nothing
-			// to fall back on and the subsite admin is the one who can act.
-			$network = License_Registry::get( $product_slug, License_Registry::SCOPE_NETWORK );
-
-			return null !== $network && ! empty( $network['key_cipher'] ) ? 'ok' : 'missing';
+			return 'missing';
 		}
 
 		return self::product_state( $product_slug, License_Registry::SCOPE_BLOG );

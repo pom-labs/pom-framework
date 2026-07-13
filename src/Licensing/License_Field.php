@@ -57,8 +57,7 @@ class License_Field {
 	}
 
 	/**
-	 * A single license tab for an existing settings section (e.g. the POM
-	 * Events tab inside the theme options Events section).
+	 * A single license tab for consumers that already own a settings section.
 	 *
 	 * @param array<string, mixed> $args Extra render() args.
 	 * @return array<string, mixed>
@@ -78,7 +77,7 @@ class License_Field {
 						),
 						'description' => sprintf(
 							/* translators: %s: product name. */
-							__( 'This license authorizes %s services and credits for this site only. Plugin updates are managed separately from the multisite network’s main site.', 'pom-framework' ),
+							__( 'This license authorizes this domain to use %s services and consume credits from the license owner’s account. Plugin updates are managed separately from the multisite network’s main site.', 'pom-framework' ),
 							$product_label
 						),
 					);
@@ -154,23 +153,11 @@ class License_Field {
 					<?php
 					printf(
 						/* translators: %s: product name. */
-						esc_html__( 'Automatic plugin updates require %s to be active and licensed on the network’s main site. This does not affect the AI credits assigned to this site.', 'pom-framework' ),
+						esc_html__( 'Automatic plugin updates require %s to be active and licensed on the network’s main site. The license saved here authorizes this domain to consume credits from its owner’s account.', 'pom-framework' ),
 						esc_html( $label )
 					);
 					?>
 				</p>
-
-				<?php if ( null === $entry && null !== License_Registry::get_key( $product_slug, License_Registry::SCOPE_NETWORK ) ) : ?>
-					<p class="description">
-						<?php
-						printf(
-							/* translators: %s: product name. */
-							esc_html__( 'No license is stored for this site yet. Requests from this site currently use the network’s %s license and its credits.', 'pom-framework' ),
-							esc_html( $label )
-						);
-						?>
-					</p>
-				<?php endif; ?>
 			<?php endif; ?>
 
 			<?php if ( $reconnect ) : ?>
@@ -256,7 +243,7 @@ class License_Field {
 	 *
 	 * Every action is pinned to the product's management scope: a subsite
 	 * request can only ever create, revalidate, or remove the subsite's own
-	 * blog entry, never the network key it may be falling back to.
+	 * blog entry, never the network key used for plugin updates.
 	 */
 	public static function handle_action(): void {
 		$product_slug = isset( $_POST['product'] ) ? sanitize_key( wp_unslash( $_POST['product'] ) ) : '';

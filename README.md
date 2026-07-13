@@ -737,7 +737,7 @@ By mirroring the input type you ensure the runtime value has been filtered by th
 
 One registry option `pom_product_licenses` keyed by canonical product slug:
 
-- Single site: non-autoloaded option. Multisite: network option, so the common POM Standard updater can read every product key while target plugins are inactive. One product license applies to one WordPress network.
+- Single site: non-autoloaded option. Multisite: network option, so the common POM Standard updater can read every product key while target plugins are inactive. Service-scoped products may also require an explicit per-blog entry as described below.
 - Each entry stores the encrypted key (`sodium:`/`openssl:` envelope, key derived from WordPress salts via versioned KDF `v1`), a masked display value, the network UUID, the last validation result, `next_check_at`, and `grace_until`.
 - If salts change and decryption fails, `License_Registry::needs_reconnect()` is true and the administrator must paste the key again; ciphertext is never logged or exposed.
 - `ensure_network_uuid()` creates the stable random network UUID sent with multisite payloads (`pom_license_network_uuid` option).
@@ -746,12 +746,12 @@ Storage contract consumers: `POM_Private_Updates` in POM Standard reads this reg
 
 #### Service-scoped products (POM AI) and multisite scopes
 
-`License_Registry::SERVICE_SCOPED_PRODUCTS` (currently only `pom-ai`) marks products whose *service* license is per-blog on multisite: subsites — which may belong to third parties — store their own key in a per-blog non-autoloaded option with the same `pom_product_licenses` name, and consume their own credits for that site only. Plugin updates always use the network entry, so a subsite-only license never grants updates.
+`License_Registry::SERVICE_SCOPED_PRODUCTS` (currently only `pom-ai`) marks products whose *service* license is per-blog on multisite: subsites — which may belong to third parties — must store their own key in a per-blog non-autoloaded option with the same `pom_product_licenses` name. That key authorizes the subsite domain to consume credits belonging to the license owner's account. Plugin updates always use the network entry, so a subsite-only license never grants updates and a network key never silently grants services to a subsite.
 
 Three scopes exist (`SCOPE_SITE`, `SCOPE_NETWORK`, `SCOPE_BLOG`), and two resolvers:
 
 - `management_scope( $slug )` — where the license is *edited* on the current site: `site` on single site; `network` on multisite (including the main site, whose network entry doubles as its own service license); `blog` only for service-scoped products on a subsite.
-- `effective_scope( $slug )` — where the key that *serves* the product lives: same as the management scope, except a subsite without its own blog entry falls back to `network`, so existing network-licensed setups keep working without action.
+- `effective_scope( $slug )` — where the key that *serves* the product lives. It matches the management scope; a service-scoped product on a subsite never falls back to `network`.
 
 Every registry method (`get`, `get_key`, `store_key`, `store_validation`, `get_validation`, `needs_reconnect`, `in_grace`, `forget`) accepts an optional trailing `$scope`; empty means reads resolve through `effective_scope()` and writes through `management_scope()`. A subsite write can therefore never touch the network entry, and a subsite's validation cache lands in its own blog entry. `POMFramework\Licensing\Private_Updater` and the POM Standard registry reader pin update-key reads to `SCOPE_NETWORK` explicitly.
 
@@ -760,11 +760,11 @@ The resulting behavior for POM AI:
 | Case | Update license | AI service license & credits |
 | --- | --- | --- |
 | Normal WordPress | The site's license | The same license |
-| Multisite, network-active | Main site / network entry | One per subsite (network fallback when a subsite stores no key) |
+| Multisite, network-active | Main site / network entry | Explicit key required on every subsite that uses AI |
 | Multisite, active on main site + subsites | Main site / network entry | One per site |
 | Multisite, active only on a subsite | No updates (no network entry) | The subsite's own license and credits |
 
-Products that consume another product's service key (POM Translate machine translation calls `License_Registry::get_key( 'pom-ai' )`) automatically use the current subsite's key through the same resolution.
+Products that consume another product's service key (POM Translate machine translation calls `License_Registry::get_key( 'pom-ai' )`) automatically use the current subsite's explicitly saved key through the same resolution. A network owner may deliberately share one account by saving the same key on several subsites when the plan authorizes all of those domains.
 
 ### License_Client
 
@@ -778,7 +778,7 @@ Grace behavior: a `network_error` (account outage) keeps the previously cached v
 
 `License_Field` renders the reusable license UI: masked key after save, status line, Save/Replace, Revalidate, and Unlink actions posted to `admin-post.php` (`pom_license_field_action`, per-product nonce). A replacement candidate is validated before it overwrites the working key, and unlink keeps the local key unless remote deactivation succeeds. Multisite keys can only be changed by network administrators; site administrators see masked status only — except blog-scoped service products (POM AI) on a subsite, where the field manages the subsite's own entry and that site's administrators (`manage_options`) may edit it.
 
-On a subsite, the field for a service-scoped product automatically switches to the site-license presentation: title "*<Product> license for this site*", description "*This license authorizes <Product> services and credits for this site only. Plugin updates are managed separately from the multisite network's main site.*", plus a permanent info note "*Automatic plugin updates require <Product> to be active and licensed on the network's main site. This does not affect the AI credits assigned to this site.*". When the subsite has no key yet but the network does, the field states that requests currently use the network license and its credits. All actions (save, revalidate, unlink) are pinned server-side to the management scope, so a subsite form can never revalidate or unlink the network key it may be falling back to.
+On a subsite, the field for a service-scoped product automatically switches to the site-license presentation: title "*<Product> license for this site*", description explaining that the key authorizes this domain to use the product and consume credits from the license owner's account, plus a permanent note that updates still depend on the main-site/network license. A missing blog entry remains missing even when a network key exists. All actions (save, revalidate, unlink) are pinned server-side to the management scope, so a subsite form can never revalidate or unlink the network key used for updates.
 
 Products never register their own license submenu. Instead they add a "License" section to their existing framework settings page through their settings filter:
 
@@ -794,7 +794,7 @@ add_filter('my_plugin_settings', static function ($settings) {
 });
 ```
 
-That renders the tab at `options-general.php?page=<page>&section=license`. To add a license tab inside an existing section (as POM Events does inside the theme options Events section), use `License_Field::settings_tab($product_slug, $label)` and assign it to `$settings['<section>']['tab']['license']`.
+That renders the tab at `options-general.php?page=<page>&section=license`. A consumer that already owns a settings section can instead use `License_Field::settings_tab($product_slug, $label)` and assign it to `$settings['<section>']['tab']['license']`.
 
 Because the form posts to `admin-post.php` (which never fires settings page hooks), adapters must register the handler on every admin request:
 
@@ -822,11 +822,10 @@ subsite, and when something is missing only users with
 site — subsite screens always stay clean.
 
 Blog-scoped service products (POM AI) are the exception on subsite screens:
-that site's own administrators see a notice when their blog-scoped entry
-needs action, or when neither a blog key nor a network key exists at all. A
-subsite silently covered by the network license never nags, the notice links
-to the subsite's own license tab, and its closing line explains that services
-and credits — not updates — are what the site license controls.
+that site's own administrators see a notice whenever their blog-scoped entry
+is missing or needs action, regardless of the network entry. The notice links
+to the subsite's own license tab and explains that services and account-owned
+credits — not updates — are what the site license controls.
 
 The shared client also reports `multisite: '1'` to account.pom.es on every
 call; the server rejects update checks from multisite installs whose plan
@@ -839,7 +838,7 @@ operations untouched, and validation responses include `multisite_allowed`.
 
 ### Writing a product license adapter
 
-See `includes/license-adapter.php` in POM Translate/Tweaks/Cache/LMS/Events or `themes/pom/includes/license-adapter.php`. An adapter only declares the canonical product slug, the settings filter to extend, and product-specific constraints (e.g. POM Cache never touches cache hot paths; POM Events hosts its tab inside the theme options Events section). Adapters never invent key options and never bypass the registry.
+See `includes/license-adapter.php` in POM Translate/Tweaks/Cache/LMS/Events or `themes/pom/includes/license-adapter.php`. An adapter only declares the canonical product slug, the settings filter to extend, and product-specific constraints (e.g. POM Cache never touches cache hot paths; POM Events owns a plugin settings page even though its event runtime requires the POM Theme). Adapters never invent key options and never bypass the registry.
 
 Coordination rule: many plugins bundle this framework in their own `vendor/pom-labs/pom-framework` copy, and the first registered autoloader wins for the whole request. Rolling out changes to `src/Licensing/` or `POM_Framework_Settings` therefore requires a `composer update pom-labs/pom-framework` in every bundling repository, not only in the licensing consumers.
 
