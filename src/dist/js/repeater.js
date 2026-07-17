@@ -343,6 +343,26 @@ jQuery(function($) {
   };
 
   /**
+   * Synchronize every repeater from its visible fields before form submission.
+   *
+   * Why: repeater values are posted through hidden JSON inputs. Rebuilding those
+   * values at the submission boundary prevents an untouched repeater from being
+   * saved with stale state when another repeater adds its first item via AJAX.
+   */
+  $(document).on('submit', '.pom-framework-settings-form', function() {
+    let $wrappers = $(this).find('.repeater-wrapper').get();
+
+    // Process nested repeaters before their parents so parent JSON receives the latest child value.
+    $wrappers.sort(function($wrapper_a, $wrapper_b) {
+      return $($wrapper_b).parents('.repeater-wrapper').length - $($wrapper_a).parents('.repeater-wrapper').length;
+    });
+
+    $wrappers.forEach(function($wrapper) {
+      $update_repeater($($wrapper));
+    });
+  });
+
+  /**
    * Add new repeater element.
    */
   $(document).on('click', '.add-new-repeater-item', function(e) {
@@ -385,6 +405,7 @@ jQuery(function($) {
       },
       success: function($response) {
         $this.before($response);
+        $update_repeater($wrapper);
         $spinner.hide();
       }
     });
