@@ -414,7 +414,7 @@ Any field can react to other inputs by providing a `dependency` array. `POM_Fram
 
 ### Working with repeaters
 
-The repeater field is a container that renders a list of child fields, supports defaults, cloning, sorting, nested repeaters, and per-item dependencies. It stores its configuration alongside the saved values in a hidden input (`data-type="repeater"`). AJAX-created rows update that value immediately, and every repeater in a framework settings form is rebuilt from its visible fields before submission, with nested repeaters processed before their parents. During sanitisation each nested field is processed with its own sanitizer so code editors are written to disk while plain inputs remain inline.
+The repeater field is a container that renders a list of child fields, supports defaults, cloning, sorting, nested repeaters, and per-item dependencies. It stores its configuration alongside the saved values in a hidden input (`data-type="repeater"`). AJAX-created rows update that value immediately, and every repeater in a framework settings form is rebuilt from its visible fields before submission, with nested repeaters processed before their parents. Row deletion reads only the hidden value owned by the current wrapper and safely rebuilds malformed or stale client-side payloads from the remaining visible rows. During sanitisation each nested field is processed with its own sanitizer so code editors are written to disk while plain inputs remain inline.
 
 ```php
 return [

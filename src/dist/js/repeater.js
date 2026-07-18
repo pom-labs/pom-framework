@@ -311,14 +311,16 @@ jQuery(function($) {
       if ($is_child_repeater) {
         const $parent_repeater_item = $wrapper.closest('.repeater');
         const $parent_index = $parent_repeater_item.parent().children('.repeater').index($parent_repeater_item);
-        const $child_repeater_name = $wrapper.find('.repeater-value').attr('name');
+        const $child_value_input = $wrapper.children('.repeater-value').last();
+        const $child_repeater_name = $child_value_input.attr('name');
         if (!$child_repeater_name) {
           continue;
         }
 
         const $parent_repeater = $wrapper.parents('.repeater-wrapper').last();
+        const $parent_value_input = $parent_repeater.children('.repeater-value').last();
         const $parent_repeater_type = $parent_repeater_item.hasClass('default') ? 'default' : 'new';
-        let $parent_value = $decode_repeater_value($parent_repeater.find('.repeater-value').last().val());
+        let $parent_value = $decode_repeater_value($parent_value_input.val());
 
         if (!Array.isArray($parent_value[$parent_repeater_type])) {
           $parent_value[$parent_repeater_type] = [];
@@ -337,7 +339,7 @@ jQuery(function($) {
           'type': 'repeater'
         };
 
-        $parent_repeater.find('.repeater-value').last().val(JSON.stringify($parent_value));
+        $parent_value_input.val(JSON.stringify($parent_value));
       }
     }
   };
@@ -448,12 +450,20 @@ jQuery(function($) {
     if (!$is_child_repeater) {
       const $repeater = $this.closest('.repeater');
       const $repeater_index = $wrapper.children('.repeater').index($repeater);
-      let $repeater_value = $wrapper.find('.repeater-value').last().val();
+      const $value_input = $wrapper.children('.repeater-value').last();
+      let $repeater_value = $decode_repeater_value($value_input.val());
 
-      $repeater_value = JSON.parse($repeater_value);
+      if (Array.isArray($repeater_value)) {
+        $repeater_value = {};
+      }
+
+      if (!Array.isArray($repeater_value[$repeater_type])) {
+        $repeater_value[$repeater_type] = [];
+      }
+
       $repeater_value[$repeater_type].splice($repeater_index, 1);
 
-      $wrapper.find('.repeater-value').last().val(JSON.stringify($repeater_value));
+      $value_input.val(JSON.stringify($repeater_value));
       $repeater.remove();
 
       $update_repeater($wrapper);
@@ -461,7 +471,7 @@ jQuery(function($) {
       return;
     }
 
-    $wrapper.find('.repeater-value').val('');
+    $wrapper.children('.repeater-value').val('');
     $this.closest('.repeater').remove();
 
     $update_repeater($wrapper);
