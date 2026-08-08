@@ -12,6 +12,18 @@ class POM_Framework_Disk {
      */
     private static $hooks_registered = false;
 
+    /**
+     * Cache managed file reads for the lifetime of the current PHP request.
+     *
+     * Why: settings files are immutable during normal reads and can be requested
+     * thousands of times while rendering a single page. Keeping both successful
+     * and missing reads here avoids repeated filesystem access without requiring
+     * OPcache, APCu, an object cache, or any persistent state.
+     *
+     * @var array
+     */
+    private static $file_read_cache = [];
+
     public function __construct() {
         if (self::$hooks_registered) {
             return;
@@ -370,9 +382,47 @@ HTACCESS;
 
         if (false !== $written) {
             self::apply_file_permissions($path);
+            self::invalidate_file_caches($path);
         }
 
         return $written;
+    }
+
+    /**
+     * Invalidate every cache variant for a path after a successful mutation.
+     *
+     * OPcache is an optional acceleration layer. The request cache remains fully
+     * functional when the extension is unavailable or disabled.
+     */
+    private static function invalidate_file_caches(string $path): void {
+        $normalized_path = self::normalize_cache_path($path);
+
+        unset(
+            self::$file_read_cache[self::file_read_cache_key($normalized_path, 'default')],
+            self::$file_read_cache[self::file_read_cache_key($normalized_path, 'array')]
+        );
+
+        clearstatcache(true, $path);
+
+        if (function_exists('opcache_invalidate') && strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
+            opcache_invalidate($path, true);
+        }
+    }
+
+    /**
+     * Normalize cache paths without requiring WordPress to be fully bootstrapped.
+     */
+    private static function normalize_cache_path(string $path): string {
+        return function_exists('wp_normalize_path')
+            ? wp_normalize_path($path)
+            : str_replace('\\', '/', $path);
+    }
+
+    /**
+     * Keep raw content and included arrays as independent cache entries.
+     */
+    private static function file_read_cache_key(string $normalized_path, string $mode): string {
+        return $mode . "\0" . $normalized_path;
     }
 
     public static function apply_file_permissions(string $path): void {
@@ -637,18 +687,29 @@ HTACCESS;
     public static function read_file($filename, $settings_dir = 'pom-framework', $return = 'default') {
         $settings_path = self::get_settings_path($settings_dir);
         $path = $settings_path . $filename;
+        $mode = $return === 'array' ? 'array' : 'default';
+        $normalized_path = self::normalize_cache_path($path);
+        $cache_key = self::file_read_cache_key($normalized_path, $mode);
 
-        if (file_exists($path)) {
-            $content = $return === 'array' ? include $path : file_get_contents($path);
-
-            if ($return === 'array') {
-                return is_array($content) ? $content : [];
-            }
-
-            return $content;
+        if (array_key_exists($cache_key, self::$file_read_cache)) {
+            return self::$file_read_cache[$cache_key];
         }
 
-        return $return === 'array' ? [] : '';
+        if (file_exists($path)) {
+            $content = $mode === 'array' ? include $path : file_get_contents($path);
+
+            if ($mode === 'array') {
+                $content = is_array($content) ? $content : [];
+            }
+
+            self::$file_read_cache[$cache_key] = $content;
+
+            return self::$file_read_cache[$cache_key];
+        }
+
+        self::$file_read_cache[$cache_key] = $mode === 'array' ? [] : '';
+
+        return self::$file_read_cache[$cache_key];
     }
 
     /**
@@ -663,7 +724,13 @@ HTACCESS;
         $settings_path = self::get_settings_path($settings_dir);
         $filename = $settings_path . $filename;
 
-        return file_exists($filename) && unlink($filename);
+        if (!file_exists($filename) || !unlink($filename)) {
+            return false;
+        }
+
+        self::invalidate_file_caches($filename);
+
+        return true;
     }
 
 }

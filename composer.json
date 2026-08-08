@@ -14,8 +14,10 @@
     "select2/select2": "4.0.13",
     "ext-json": "*",
     "cerdic/css-tidy": "v2.0.1",
-    "ext-zend-opcache": "*",
     "ext-fileinfo": "*"
+  },
+  "suggest": {
+    "ext-zend-opcache": "Optionally accelerates generated PHP settings files between requests."
   },
   "autoload": {
     "psr-4": {

@@ -6,7 +6,7 @@ Key advantages at a glance:
 
 - **Purpose-built admin UI builder** – Declare tabs, subsections, and fields, then call a single render method to output fully localised markup with nonce handling, repeaters, and dependency metadata baked in.
 - **Deterministic configuration** – Settings live alongside your code in PHP files, yet any field can opt into WordPress options or theme mods when runtime overrides are required.
-- **Performance-first storage** – OPcache caches the generated settings arrays, reducing database lookups and avoiding autoload bloat while still supporting multisite-aware directories.
+- **Performance-first storage** – Request-local memoization reuses generated settings arrays without requiring a persistent cache, while optional OPcache can accelerate them between requests.
 - **Extensive field library** – Everything from text inputs to CodeMirror editors, Select2-powered dropdowns, signature pads, font managers, and nested repeaters ships out of the box.
 - **Customisable tool cards** – Add wrapper elements, hero images, and onboarding copy to make complex toggle panels look polished without rewriting templates.
 
@@ -92,10 +92,11 @@ function demo_settings_page() {
 
 ### Performance profile
 
-- **Zero database round-trips on cold start** – `require_once` loads a compiled PHP array, whereas `get_option()` must query the database unless caches are already warm.
-- **OPcache acceleration** – Once deployed, PHP bytecode lives in memory; subsequent requests simply reference the cached array.
+- **Zero database round-trips on cold start** – `include` loads a generated PHP array, whereas `get_option()` must query the database unless caches are already warm.
+- **Request-local memoization** – Each managed path and return mode is read once per PHP request, including missing files. Successful framework writes and deletes invalidate the affected entry immediately.
+- **Optional OPcache acceleration** – When OPcache is available, compiled PHP bytecode can be reused between requests. The framework has identical storage behavior without it.
 - **Smaller autoload payload** – Large option arrays no longer inflate `wp_options` autoload data, improving TTFB across the board.
-- **Predictable caching** – Files benefit from both the OS page cache and OPcache, avoiding sudden cache evictions that affect options.
+- **Predictable caching** – Files benefit from the request cache and the operating system page cache, with OPcache adding another optional layer.
 
 ### Operational advantages
 
@@ -121,6 +122,8 @@ function demo_settings_page() {
 - PHP 7.4 or higher
 - WordPress 5.0 or higher
 - Composer (for installing the package and autoload file)
+
+OPcache, APCu, Redis, and persistent object caching are optional. No cache extension is required for installation or runtime behavior.
 
 ## Installation
 
@@ -406,7 +409,7 @@ return [
 ];
 ```
 
-When the administrator saves the page the framework writes the alternative targets, updates `fields_save_as.php`, and invalidates OPcache so subsequent requests pick up the change immediately. `POM_Framework_Settings::get_setting_value()` consults that metadata before it sanitises the value, meaning your front-end code can continue to call the helper without caring whether the value lives in a PHP array, a theme mod, or an option.
+When the administrator saves the page the framework writes the alternative targets, updates `fields_save_as.php`, clears the affected request-local reads, and invalidates OPcache when it is available so subsequent reads pick up the change immediately. `POM_Framework_Settings::get_setting_value()` consults that metadata before it sanitises the value, meaning your front-end code can continue to call the helper without caring whether the value lives in a PHP array, a theme mod, or an option.
 
 ### Dependencies and conditional logic
 
@@ -561,7 +564,7 @@ POM Framework exposes several helper classes so you can inspect configuration, g
 
 - **Automatic directories** – `create_settings_dir()` provisions `wp-content/settings/pom-framework/<site>/<slug>/` (including `.htaccess`) the first time a page saves values, making the storage multisite-aware.
 - **File serialization** – `generate_file_content()` turns an array into a PHP file with metadata headers, while `save_to_file()` writes arbitrary content such as code editor values, removes the previous managed file when a value is cleared, and returns the saved path.
-- **Reading and cleanup** – `read_file()` and `delete_file()` provide convenient access to stored configuration and let you remove generated assets when a module is disabled.
+- **Reading and cleanup** – `read_file()` memoizes each managed path and return mode for one request, including missing files. `write_file()` and `delete_file()` invalidate affected entries immediately, so saving and rereading in one request remains consistent without requiring OPcache or another cache extension. Direct filesystem changes that bypass these helpers become visible on the next request.
 - **Font and signature support** – The constructor hooks into `upload_dir`/`upload_mimes` so custom fonts are stored under `/fonts`, only attachments stored under `/uploads/fonts/` are hidden from the standard Media Library (the Pomatio font picker modal can still browse them), and the signature helpers persist base64 canvases under a locked-down directory.
 
 ### `POM_Framework_Settings`
