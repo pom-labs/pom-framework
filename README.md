@@ -740,12 +740,12 @@ By mirroring the input type you ensure the runtime value has been filtered by th
 
 One registry option `pom_product_licenses` keyed by canonical product slug:
 
-- Single site: non-autoloaded option. Multisite: network option, so the common POM Standard updater can read every product key while target plugins are inactive. Service-scoped products may also require an explicit per-blog entry as described below.
+- Single site: non-autoloaded option. Multisite: network option, so the common Pomatio Platform updater can read every product key while target plugins are inactive. Service-scoped products may also require an explicit per-blog entry as described below.
 - Each entry stores the encrypted key (`sodium:`/`openssl:` envelope, key derived from WordPress salts via versioned KDF `v1`), a masked display value, the network UUID, the last validation result, `next_check_at`, and `grace_until`.
 - If salts change and decryption fails, `License_Registry::needs_reconnect()` is true and the administrator must paste the key again; ciphertext is never logged or exposed.
 - `ensure_network_uuid()` creates the stable random network UUID sent with multisite payloads (`pom_license_network_uuid` option).
 
-Storage contract consumers: `POM_Private_Updates` in POM Standard reads this registry through its own minimal reader (`plugins/pom-pomstandard/includes/license-registry-reader.php`). Any change to the option name, entry schema, KDF, or envelope must update both sides and bump the version markers.
+Storage contract consumers: `POM_Private_Updates` in Pomatio Platform reads this registry through its own minimal reader (`plugins/pomatio-platform/private-updates/includes/license-registry-reader.php`). Any change to the option name, entry schema, KDF, or envelope must update both sides and bump the version markers.
 
 #### Service-scoped products (POM AI) and multisite scopes
 
@@ -756,7 +756,7 @@ Three scopes exist (`SCOPE_SITE`, `SCOPE_NETWORK`, `SCOPE_BLOG`), and two resolv
 - `management_scope( $slug )` — where the license is *edited* on the current site: `site` on single site; `network` on multisite (including the main site, whose network entry doubles as its own service license); `blog` only for service-scoped products on a subsite.
 - `effective_scope( $slug )` — where the key that *serves* the product lives. It matches the management scope; a service-scoped product on a subsite never falls back to `network`.
 
-Every registry method (`get`, `get_key`, `store_key`, `store_validation`, `get_validation`, `needs_reconnect`, `in_grace`, `forget`) accepts an optional trailing `$scope`; empty means reads resolve through `effective_scope()` and writes through `management_scope()`. A subsite write can therefore never touch the network entry, and a subsite's validation cache lands in its own blog entry. `POMFramework\Licensing\Private_Updater` and the POM Standard registry reader pin update-key reads to `SCOPE_NETWORK` explicitly.
+Every registry method (`get`, `get_key`, `store_key`, `store_validation`, `get_validation`, `needs_reconnect`, `in_grace`, `forget`) accepts an optional trailing `$scope`; empty means reads resolve through `effective_scope()` and writes through `management_scope()`. A subsite write can therefore never touch the network entry, and a subsite's validation cache lands in its own blog entry. `POMFramework\Licensing\Private_Updater` and the Pomatio Platform registry reader pin update-key reads to `SCOPE_NETWORK` explicitly.
 
 The resulting behavior for POM AI:
 
@@ -773,7 +773,7 @@ Products that consume another product's service key (POM Translate machine trans
 
 HTTP wrapper for `pom-lic/v2`: `validate()`, `status()`, `deactivate_domain()`, `check_update()`, `validate_and_cache()`, `cached_or_revalidate()`. Every request containing a license key is signed over its exact JSON body with `X-POM-Timestamp`, a random `X-POM-Nonce`, and `X-POM-Signature` (SHA-256 HMAC keyed by the license key). `signed_headers()` is public for product APIs such as POM AI that use the same transport contract. The API base is filterable via `pom_license_api_base` for local/staging account servers.
 
-`Private_Updater` is the licensed v2 compatibility fallback for an active product when the common POM Standard updater is unavailable. It exposes no metadata without a stored key, refreshes the one-time token at installation time, and verifies the package SHA-256. The common updater remains authoritative because it can discover inactive plugins/themes.
+`Private_Updater` is the licensed v2 compatibility fallback for an active product when the common Pomatio Platform updater is unavailable. It exposes no metadata without a stored key, refreshes the one-time token at installation time, and verifies the package SHA-256. The common updater remains authoritative because it can discover inactive plugins/themes.
 
 Grace behavior: a `network_error` (account outage) keeps the previously cached valid state while `grace_until` (7 days after the last valid check) has not passed; deterministic failures (invalid key, revoked, expired, product mismatch) clear grace immediately.
 
