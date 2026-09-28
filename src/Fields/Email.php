@@ -30,7 +30,7 @@ class Email {
 
             ?>
 
-            <input aria-label="<?= $args['label'] ?? '' ?>" placeholder="<?= $args['placeholder'] ?? '' ?>" type="email" id="<?= $args['id'] ?>" name="<?= $args['name'] ?>" value="<?= $value ?>" class="form-control <?= $args['class'] ?? '' ?>" data-type="email"<?= $disabled ?><?= $data_dependencies ?>>
+            <input aria-label="<?= esc_attr($args['label'] ?? '') ?>" placeholder="<?= esc_attr($args['placeholder'] ?? '') ?>" type="email" id="<?= esc_attr($args['id']) ?>" name="<?= esc_attr($args['name']) ?>" value="<?= esc_attr($value) ?>" class="form-control <?= esc_attr($args['class'] ?? '') ?>" data-type="email"<?= $disabled ?><?= $data_dependencies ?>>
 
             <?php
 

@@ -123,6 +123,11 @@ class POM_Framework_Save {
                         }
                     }
                     else {
+                        // WordPress adds request slashes; remove them only at the
+                        // form boundary so stored input values retain literal quotes.
+                        if (in_array($type, ['text', 'email'], true)) {
+                            $value = wp_unslash($value);
+                        }
                         $sanitized = pom_framework_sanitize_defined_field($value, $field_definition, $page_slug, $name);
 
                         if ($save_target['storage'] === 'default') {

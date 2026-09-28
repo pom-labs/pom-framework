@@ -24,7 +24,7 @@ class Text {
             $used_for_title = !empty($args['used_for_title']) ? ' use-for-title' : '';
 
             $value = '';
-            if (!empty($args['value'])) {
+            if (isset($args['value']) && $args['value'] !== '') {
                 $value = $args['value'];
             }
             elseif (!empty($args['default'])) {
@@ -33,7 +33,7 @@ class Text {
 
             ?>
 
-            <input aria-label="<?= $args['label'] ?? '' ?>" placeholder="<?= $args['placeholder'] ?? '' ?>" type="text" id="<?= $args['id'] ?>" name="<?= $args['name'] ?>" value="<?= $value ?>" class="form-control<?= $used_for_title ?> <?= $args['class'] ?? '' ?>"<?= $data_dependencies ?> data-type="text"<?= $disabled ?>>
+            <input aria-label="<?= esc_attr($args['label'] ?? '') ?>" placeholder="<?= esc_attr($args['placeholder'] ?? '') ?>" type="text" id="<?= esc_attr($args['id']) ?>" name="<?= esc_attr($args['name']) ?>" value="<?= esc_attr($value) ?>" class="form-control<?= esc_attr($used_for_title) ?> <?= esc_attr($args['class'] ?? '') ?>"<?= $data_dependencies ?> data-type="text"<?= $disabled ?>>
 
             <?php
 

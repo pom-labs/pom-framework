@@ -357,6 +357,8 @@ Every field is declared as a PHP array and rendered by `POM_Framework::add_field
 
 Because each field posts back under its `name`, the save handler can detect the field type, run the corresponding sanitizer from `class-sanitize.php`, and persist a clean value to disk. When `persist` is set to `false`, the framework skips both the save step and the saved-value hydration step, making the field suitable for transient dependency markers such as “currently selected tab”.
 
+Text and email inputs escape their HTML attribute values when rendered. Supply ordinary text rather than HTML-encoding stored values: quotes, apostrophes, and ampersands remain editable without becoming attributes or markup. Text inputs preserve `0` as a saved value, including inside repeaters, instead of replacing it with an empty value or a default. For simple Text and Email fields outside repeaters, the form saver removes WordPress request slashes once before sanitizing; reading stored values does not remove literal backslashes. Sanitization when saving and escaping when rendering are separate steps.
+
 ### External storage with `save_as`
 
 Setting `save_as` on a field instructs the saver to sanitise the payload and forward it to either the theme-mod API or the options table instead of appending it to the generated `<setting>.php` file. The saver records the routing in `fields_save_as.php` so the renderer, sanitizers, and translation helpers can look up the correct source later.
