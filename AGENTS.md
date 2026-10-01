@@ -6,6 +6,12 @@ This is the source repository for `pom-labs/pom-framework`. Consumer plugins and
 
 ALL documentation for this repository lives in the single `README.md`. This is intentional and differs from other POM repos: an AI agent must be able to understand the framework's entire scope and behavior — settings pages, fields, helpers, and the product licensing client — from one document.
 
+- Existing documentation filenames and paths are stable identifiers that may determine published URLs. Preserve them to avoid broken links and production 404s.
+- You may edit the existing `README.md` in place. The single-file documentation rule below remains in force; this policy does not authorize additional documentation files or directories here.
+- Never delete, rename, or move an existing documentation file or directory without the user's prior explicit instruction and consent for that specific operation. If that authorization is not already present, explain the affected paths and proposed destinations, request permission, and wait before acting. A general request to update, clean up, reorganize, or improve documentation is not authorization.
+- This protection includes renumbering topic directories or Markdown basenames and moving a parent directory. Naming, hierarchy, and code-mirroring conventions apply to new paths; they never authorize changing existing paths without prior consent.
+- After an explicitly authorized deletion, rename, or move, update affected links and documentation manifests in the same change. Those maintenance requirements do not themselves authorize the operation.
+
 - Never create a `docs/` directory or separate documentation files here.
 - Every change to framework functionality must update the relevant `README.md` section in the same change.
 - The licensing client (`src/Licensing/`) is documented in the "Product licensing client" section of `README.md`; keep it synchronized with the storage contract mirrored by `plugins/pomatio-platform/private-updates/includes/license-registry-reader.php` in the multisite project.
