@@ -70,7 +70,6 @@ final class Queue {
 			expires bigint unsigned NOT NULL,
 			payload longtext NOT NULL,
 			result longtext NOT NULL,
-			attachment char(32) NOT NULL DEFAULT '',
 			storage_bytes int unsigned NOT NULL DEFAULT 2097152,
 			PRIMARY KEY (id), KEY state (state, created), KEY expires (expires), KEY storage (state, storage_bytes)
 		) {$wpdb->get_charset_collate()}";
@@ -120,7 +119,7 @@ final class Queue {
 			$count = count( $receipts );
 			if ( $count >= self::RECEIPT_CAPACITY || $bytes + 2 * MB_IN_BYTES > self::STORAGE_LIMIT ) {
 				// Keep ordinary admission on the covering storage index; fetch cleanup metadata only under pressure.
-				$receipts = $wpdb->get_results( $wpdb->prepare( "SELECT id, blog_id, attachment, state, storage_bytes FROM {$table} FORCE INDEX (expires) WHERE state IN ('completed','failed','uncertain','expired') ORDER BY expires, id LIMIT %d", self::RECEIPT_CAPACITY ), ARRAY_A );
+				$receipts = $wpdb->get_results( $wpdb->prepare( "SELECT id, state, storage_bytes FROM {$table} FORCE INDEX (expires) WHERE state IN ('completed','failed','uncertain','expired') ORDER BY expires, id LIMIT %d", self::RECEIPT_CAPACITY ), ARRAY_A );
 				if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 				foreach ( $receipts as $receipt ) {
 					if ( $count < self::RECEIPT_CAPACITY && $bytes + 2 * MB_IN_BYTES <= self::STORAGE_LIMIT ) { break; }
@@ -129,14 +128,13 @@ final class Queue {
 					// Concurrent cleanup may already have removed this immutable terminal row.
 					--$count;
 					$bytes -= (int) $receipt['storage_bytes'];
-					if ( $deleted === 1 && $receipt['attachment'] !== '' ) { self::discard_legacy_audio( $receipt['attachment'], (int) $receipt['blog_id'] ); }
 				}
 			}
 			if ( $count >= self::RECEIPT_CAPACITY || $bytes + 2 * MB_IN_BYTES > self::STORAGE_LIMIT ) { return self::busy(); }
 			$id = $request_id !== '' ? $request_id : bin2hex( random_bytes( 16 ) );
 			$blog = $blog ?: get_current_blog_id();
 			$record = array( 'id' => $id, 'blog_id' => $blog, 'origin_blog' => get_current_blog_id(), 'owner' => $owner, 'kind' => $kind,
-				'state' => 'queued', 'created' => time(), 'expires' => time() + self::RETENTION, 'payload' => $encoded, 'result' => '', 'attachment' => $payload['audio']['blob'] ?? '', 'storage_bytes' => 2 * MB_IN_BYTES );
+				'state' => 'queued', 'created' => time(), 'expires' => time() + self::RETENTION, 'payload' => $encoded, 'result' => '', 'storage_bytes' => 2 * MB_IN_BYTES );
 			if ( ! $wpdb->insert( $table, $record ) ) { return new WP_Error( 'pom_mcp_task_storage', 'The operation could not be saved.', array( 'status' => 503 ) ); }
 			if ( ! self::ensure_maintenance() ) {
 				$wpdb->delete( $table, array( 'id' => $id, 'state' => 'queued' ) );
@@ -205,11 +203,6 @@ final class Queue {
 		if ( $kind !== '' && isset( self::$eligibility[ $kind ] ) ) {
 			return (bool) ( self::$eligibility[ $kind ] )( $blog );
 		}
-		// A legacy job can be observed from a worker host where its product is inactive.
-		$network = (array) get_network_option( (int) $site->network_id, 'active_sitewide_plugins', array() );
-		$plugins = (array) get_blog_option( $blog, 'active_plugins', array() );
-		if ( $kind === 'mcp' ) { return isset( $network['pom-ai/pom-ai.php'] ) || in_array( 'pom-ai/pom-ai.php', $plugins, true ); }
-		if ( $kind === '' && ( isset( $network['pom-ai/pom-ai.php'] ) || in_array( 'pom-ai/pom-ai.php', $plugins, true ) ) ) { return true; }
 		if ( $kind === '' ) {
 			foreach ( self::$eligibility as $eligible ) { if ( $eligible( $blog ) ) { return true; } }
 		}
@@ -345,22 +338,7 @@ final class Queue {
 			$json = wp_json_encode( array( 'code' => 'pom_mcp_task_result_size', 'message' => 'The result could not be retained. Inspect the site before repeating a write; use smaller read operations.' ) );
 		}
 		$table = self::table();
-		$row = $wpdb->get_row( $wpdb->prepare( "SELECT attachment, blog_id FROM {$table} WHERE id = %s", $id ), ARRAY_A );
-		$updated = $wpdb->update( $table, array( 'state' => $state, 'expires' => time() + self::RETENTION, 'result' => $json, 'payload' => '', 'attachment' => '', 'storage_bytes' => strlen( $json ) ), array( 'id' => $id, 'state' => $expected ) );
-		// A stale event must not delete a recording already claimed by another worker.
-		if ( $updated === 1 && ! empty( $row['attachment'] ) ) { self::discard_legacy_audio( $row['attachment'], (int) $row['blog_id'] ); }
-	}
-
-	/** Remove recordings left by the retired admin queue without restoring its execution handler. */
-	private static function discard_legacy_audio( string $id, int $blog ): void {
-		if ( ! preg_match( '/^[a-f0-9]{32}$/D', $id ) ) { return; }
-		$switched = is_multisite() && get_current_blog_id() !== $blog;
-		if ( $switched ) { switch_to_blog( $blog ); }
-		try {
-			$uploads = wp_upload_dir( null, false );
-			$path = $uploads['basedir'] . '/pom-ai-recordings/' . $id . '.bin';
-			if ( is_file( $path ) ) { wp_delete_file( $path ); }
-		} finally { if ( $switched ) { restore_current_blog(); } }
+		$wpdb->update( $table, array( 'state' => $state, 'expires' => time() + self::RETENTION, 'result' => $json, 'payload' => '', 'storage_bytes' => strlen( $json ) ), array( 'id' => $id, 'state' => $expected ) );
 	}
 
 	public static function cleanup(): void {
@@ -377,7 +355,7 @@ final class Queue {
 					$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET state = 'uncertain', expires = %d, payload = '', result = %s, storage_bytes = %d WHERE state = 'running' LIMIT 64", time() + self::RETENTION, $json, strlen( $json ) ) );
 				} finally { self::lock( 'execution', true ); }
 			}
-			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, blog_id, attachment, state FROM {$table} FORCE INDEX (expires) WHERE expires < %d AND state <> 'running' ORDER BY expires LIMIT 100", time() ), ARRAY_A );
+			$rows = $wpdb->get_results( $wpdb->prepare( "SELECT id, blog_id, state FROM {$table} FORCE INDEX (expires) WHERE expires < %d AND state <> 'running' ORDER BY expires LIMIT 100", time() ), ARRAY_A );
 			foreach ( $rows as $row ) {
 				// A queued row may have been claimed or finished since this cleanup snapshot.
 				if ( $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE id = %s AND state = %s AND expires < %d", $row['id'], $row['state'], time() ) ) !== 1 ) { continue; }
@@ -387,7 +365,6 @@ final class Queue {
 					try { wp_clear_scheduled_hook( self::HOOK, array( $row['id'], (int) $row['blog_id'] ) ); }
 					finally { if ( $switched ) { restore_current_blog(); } }
 				}
-				if ( $row['attachment'] !== '' ) { self::discard_legacy_audio( $row['attachment'], (int) $row['blog_id'] ); }
 			}
 		}
 		finally { self::lock( 'cleanup', true ); }

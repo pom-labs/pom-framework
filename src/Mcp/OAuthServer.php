@@ -107,11 +107,7 @@ final class OAuthServer {
 		if ( $client_name === '' ) {
 			$client_name = 'MCP client';
 		}
-		if ( array_key_exists( 'scope', $body ) ) {
-			$scopes = $this->requested_scopes( $body['scope'] );
-		} else {
-			$scopes = array( Settings::READ_SCOPE );
-		}
+		$scopes = $this->requested_scopes( array_key_exists( 'scope', $body ) ? $body['scope'] : '' );
 		if ( empty( $scopes ) ) {
 			$this->json_error( 'invalid_scope', 'Request mcp:read and only scopes available to this client.', 400 );
 		}

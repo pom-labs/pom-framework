@@ -31,6 +31,9 @@ final class Admin {
 		}
 		check_admin_referer( self::ACTION );
 		$action = sanitize_key( self::field( 'operation' ) );
+		if ( $action === 'download_skill' ) {
+			$this->download_skill();
+		}
 		$storage = new Storage();
 		switch ( $action ) {
 			case 'save':
@@ -59,6 +62,25 @@ final class Admin {
 				wp_die( esc_html__( 'Unknown POM MCP settings action.', 'pom-framework' ), '', array( 'response' => 400 ) );
 		}
 		wp_safe_redirect( add_query_arg( 'pom_mcp_saved', '1', self::url() ), 303 );
+		exit;
+	}
+
+	private function download_skill(): void {
+		$name = sanitize_key( self::field( 'skill' ) );
+		$skill = $this->bootstrap->skills()[ $name ] ?? null;
+		if ( ! $skill ) {
+			wp_die( esc_html__( 'This skill is unavailable on this site.', 'pom-framework' ), '', array( 'response' => 404 ) );
+		}
+		$archive = $skill->zip();
+		if ( is_wp_error( $archive ) ) {
+			wp_die( esc_html( $archive->get_error_message() ), '', array( 'response' => 503 ) );
+		}
+		RequestPolicy::send_no_store();
+		header( 'Content-Type: application/zip' );
+		header( 'Content-Disposition: attachment; filename="' . $skill->name . '.zip"' );
+		header( 'Content-Length: ' . strlen( $archive ) );
+		header( 'X-Content-Type-Options: nosniff' );
+		echo $archive;
 		exit;
 	}
 
@@ -157,10 +179,37 @@ final class Admin {
 				<?php endforeach; ?>
 			</ul>
 			<?php $this->render_settings( $settings, $requirements ); ?>
+			<?php $this->render_skills(); ?>
 			<?php if ( $storage->ready() ) : ?>
 				<?php $this->render_connections( $settings, $storage ); ?>
 			<?php endif; ?>
 		</div>
+		<?php
+	}
+
+	private function render_skills(): void {
+		$skills = $this->bootstrap->skills();
+		if ( ! $skills ) { return; }
+		?>
+		<h2><?php esc_html_e( 'Skills', 'pom-framework' ); ?></h2>
+		<p><?php esc_html_e( 'Download a ZIP to install a skill in your AI client, or ask a connected agent to read it with pom_list_skills and pom_get_skill.', 'pom-framework' ); ?></p>
+		<table class="widefat striped">
+			<thead><tr><th scope="col"><?php esc_html_e( 'Skill', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'Download', 'pom-framework' ); ?></th></tr></thead>
+			<tbody>
+				<?php foreach ( $skills as $skill ) : ?>
+					<tr>
+						<th scope="row"><?php echo esc_html( $skill->label ); ?></th>
+						<td>
+							<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+								<?php self::form_fields( 'download_skill' ); ?>
+								<input type="hidden" name="skill" value="<?php echo esc_attr( $skill->name ); ?>">
+								<button type="submit" class="button" aria-label="<?php echo esc_attr( sprintf( __( 'Download %s ZIP', 'pom-framework' ), $skill->label ) ); ?>"><?php esc_html_e( 'Download ZIP', 'pom-framework' ); ?></button>
+							</form>
+						</td>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
 		<?php
 	}
 

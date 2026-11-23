@@ -33,9 +33,14 @@ final class AccountDestination {
 	}
 
 	public static function allows( Operation $operation ): bool {
+		return self::allows_operation( $operation->name, $operation->effect, $operation->network_group );
+	}
+
+	public static function allows_operation( string $name, string $effect, string $network_group ): bool {
 		// Reuse the reviewed delegation policy. Site-only and chargeable operations stay local.
-		if ( $operation->effect === Operation::READ ) { return $operation->network_group === Operation::READ; }
-		return $operation->effect === Operation::WRITE && in_array( $operation->network_group,
+		if ( ! self::allows_name( $name ) ) { return false; }
+		if ( $effect === Operation::READ ) { return $network_group === Operation::READ; }
+		return $effect === Operation::WRITE && in_array( $network_group,
 			array( 'site_content_writes', 'theme_writes', 'option_writes', 'woocommerce_writes', 'cache_writes' ), true );
 	}
 

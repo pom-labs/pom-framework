@@ -15,7 +15,7 @@ final class AccountGateway {
 	}
 
 	public static function registered(): bool {
-		return self::$blog === get_current_blog_id();
+		return self::$blog > 0 && self::$blog === get_current_blog_id();
 	}
 
 	public static function scopes(): array {

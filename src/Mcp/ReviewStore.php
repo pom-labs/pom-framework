@@ -6,11 +6,7 @@ use WP_Error;
 
 /** Persist exact human decisions and claim each reviewed operation before its effects start. */
 final class ReviewStore {
-	private string $prefix;
-
-	public function __construct( bool $legacy = false ) {
-		$this->prefix = $legacy ? 'pom_ai_mcp_approval_' : 'pom_mcp_review_';
-	}
+	private const PREFIX = 'pom_mcp_review_';
 
 	/** Object keys are unordered in JSON. List order and scalar types remain significant. */
 	public static function fingerprint( $value ): string {
@@ -61,10 +57,10 @@ final class ReviewStore {
 		if ( ! is_string( $encoded ) || strlen( $encoded ) > 2 * MB_IN_BYTES ) {
 			return new WP_Error( 'pom_ai_mcp_approval_size', 'Use a smaller operation for review.', array( 'status' => 400 ) );
 		}
-		return ( new Storage() )->locked( 'review-admission:' . $this->prefix . $owner, function () use ( $record, $owner ) {
+		return ( new Storage() )->locked( 'review-admission:' . self::PREFIX . $owner, function () use ( $record, $owner ) {
 			global $wpdb;
 			$this->cleanup();
-			$prefix = $this->prefix . $owner . '_';
+			$prefix = self::PREFIX . $owner . '_';
 			$options = $wpdb->get_col( $wpdb->prepare( "SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s LIMIT 100", $wpdb->esc_like( $prefix ) . '%' ) );
 			if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_ai_mcp_approval_storage', 'The approval request could not be stored.', array( 'status' => 503 ) ); }
 			if ( count( $options ) >= 100 ) { return new WP_Error( 'pom_ai_mcp_approval_limit', 'The approval queue is full. Wait for previous requests to expire.', array( 'status' => 429 ) ); }
@@ -79,7 +75,7 @@ final class ReviewStore {
 		global $wpdb;
 		if ( ! wp_is_uuid( $id, 4 ) || get_current_user_id() < 1 ) { return array( null, null, null ); }
 		if ( function_exists( 'pom_pomstandard_force_database_reads_to_writer' ) ) { pom_pomstandard_force_database_reads_to_writer(); }
-		$option = $this->prefix . get_current_user_id() . '_' . $id;
+		$option = self::PREFIX . get_current_user_id() . '_' . $id;
 		$raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $option ) );
 		$record = is_string( $raw ) ? maybe_unserialize( $raw ) : null;
 		if ( ! is_array( $record ) || ( $record['user'] ?? 0 ) !== get_current_user_id() || ( $record['blog'] ?? 0 ) !== get_current_blog_id()
@@ -152,7 +148,6 @@ final class ReviewStore {
 	}
 
 	public function cleanup(): void {
-		$cursor = $this->prefix === 'pom_ai_mcp_approval_' ? 'pom_ai_mcp_cleanup_approval_cursor' : 'pom_mcp_review_cleanup_cursor';
-		Storage::prune_options( $this->prefix, $cursor );
+		Storage::prune_options( self::PREFIX, 'pom_mcp_review_cleanup_cursor' );
 	}
 }

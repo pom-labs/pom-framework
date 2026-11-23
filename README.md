@@ -747,6 +747,8 @@ If a site's home URL contains a path, map the standard authorization metadata UR
 
 **Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** records connection outcomes and operation names. Settings, credentials and activity belong to the current site in a multisite network.
 
+**Skills** lists the packages provided by the products active on this site. A site administrator can download a ZIP from **Settings → POM MCP** even before enabling remote access. Extract each skill folder into the AI client's skill directory. A direct MCP connection can call `pom_list_skills` and `pom_get_skill` to read the same manifest and files. Use the manifest revision when fetching individual files. Product skills describe workflows and grant no additional access.
+
 If a client loses the response to a token refresh and immediately disconnects, the OAuth revocation endpoint can still revoke the replacement grant using the previous refresh token during the short refresh recovery window.
 
 ### Register a product
@@ -772,6 +774,8 @@ Use `Operation::COST` for paid product operations with an authoritative executio
 The optional fourth argument to `register_provider()` returns `POMFramework\Mcp\Catalog_Item` descriptors for resources and prompts. Register each resource with its stable `pom://` URI and MIME type. Prompt descriptors declare their string arguments. Give each item a WordPress permission callback because its content can depend on the connected account. Providers that need the grant context can opt in with the `Operation` constructor's ninth argument. Preview and execution callbacks then receive the validated arguments followed by the actor. The tenth argument delegates a read or assigns a write to an established network group. Resources and prompts also require explicit delegation. New descriptors default to site-local.
 
 The built-in `pom_get_site_context` tool returns the site identity, registered product identifiers, multisite status and contract version. Use it to verify the connection and its destination.
+
+After registering a provider, call `Bootstrap::register_skill( $provider_id, $name, $label, $absolute_directory, $files )` to offer a skill through the shared screen and tools. The file list defaults to `SKILL.md`. Include an exact relative allowlist of Markdown, JSON and YAML files when shipping references. The entrypoint declares the matching slug as its YAML `name` and a quoted three-part version under `metadata`. Files must be UTF-8 and limited to 64 KiB each and 512 KiB per package. The skill tools are direct-site reads. POM Theme exposes its authoring skill to eligible delegated connections through `pom_get_authoring_skill`.
 
 The selected Framework bootstrap keeps its MCP classes together when another active product registers an older Composer loader. Bundle the same Framework revision in all current POM MCP products so the first registered provider can start the reviewed runtime.
 

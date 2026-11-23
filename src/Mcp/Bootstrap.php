@@ -22,6 +22,13 @@ final class Bootstrap {
 		self::$instance->registry->register( $id, $label, $operations, $items );
 	}
 
+	/** Register a packaged, read-only skill after its product provider. */
+	public static function register_skill( string $provider, string $name, string $label, string $directory, array $files = array( 'SKILL.md' ) ): void {
+		if ( self::$instance !== null ) {
+			self::$instance->registry->register_skill( $provider, new SkillPackage( $name, $label, $directory, $files ) );
+		}
+	}
+
 	private function __construct() {
 		$this->registry = new Registry();
 		if ( is_multisite() ) { $this->network = new Network( array( $this, 'operations' ), $this->registry ); }
@@ -36,7 +43,6 @@ final class Bootstrap {
 			( new Admin( $this ) )->hooks();
 		}
 	}
-
 
 	public function requirements(): string {
 		if ( version_compare( get_bloginfo( 'version' ), '6.9', '<' )
@@ -57,6 +63,11 @@ final class Bootstrap {
 
 	public function providers(): array {
 		return $this->registry->providers();
+	}
+
+	/** @return array<string,SkillPackage> */
+	public function skills(): array {
+		return $this->registry->skills();
 	}
 
 	public function problem(): string {
