@@ -56,7 +56,7 @@ final class Network {
 		if ( ! is_multisite() ) { return; }
 		add_action( 'network_admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_post_' . self::ACTION, array( $this, 'save' ) );
-		if ( self::policy()['enabled'] && Queue::available() ) {
+		if ( self::policy()['enabled'] ) {
 			Queue::hooks();
 			Queue::register( self::JOB, array( $this, 'work' ), static function ( int $blog ): bool {
 				return self::allowed_site( $blog, self::policy() );
@@ -65,7 +65,7 @@ final class Network {
 	}
 
 	public function shared_origin(): bool {
-		return self::main() === get_current_blog_id() && self::policy()['enabled'] && Settings::oauth_available() && Queue::available();
+		return ! AccountGateway::registered() && self::main() === get_current_blog_id() && self::policy()['enabled'] && Settings::oauth_available();
 	}
 
 	public function scopes(): array {
@@ -172,7 +172,7 @@ final class Network {
 		$destination = $record['network'];
 		$policy = self::policy();
 		return $this->shared_origin() && self::authorize( $actor, true ) && self::allowed_site( $destination['blog'], $policy )
-			&& ! self::legacy_origin() && hash_equals( $policy['generation'], $destination['generation'] )
+			&& hash_equals( $policy['generation'], $destination['generation'] )
 			&& $destination['issuer'] === untrailingslashit( (string) get_blog_option( $destination['blog'], 'home' ) );
 	}
 
@@ -185,14 +185,14 @@ final class Network {
 		$blog = get_current_blog_id();
 		$origin = (int) $row['origin_blog'];
 		$policy = self::policy();
-		if ( ! Queue::running() || ! Settings::secure_site() || class_exists( 'POM_AI_MCP_Bootstrap', false ) || class_exists( 'POM_AI_Account_MCP', false )
+		if ( ! Queue::running() || ! Settings::secure_site() || AccountGateway::registered()
 			|| $origin !== self::main() || ! self::allowed_site( $blog, $policy )
 			|| $payload['generation'] !== $policy['generation'] || $payload['issuer'] !== Settings::issuer() ) { return self::denied(); }
 		$action = $payload['action'];
 		$write = in_array( $action, array( 'prepare', 'apply' ), true );
 		$previous = get_current_user_id();
 		$actor = $this->at_origin( $origin, static function () use ( $payload, $row, $write, $blog ) {
-			if ( ! Settings::get()['enabled'] || ! Settings::oauth_available() || self::legacy_origin() ) { return self::denied(); }
+			if ( ! Settings::get()['enabled'] || ! Settings::oauth_available() ) { return self::denied(); }
 			$user = (int) ( $payload['connection']['user_id'] ?? 0 );
 			clean_user_cache( $user );
 			$actor = ( new TokenStore( new Storage() ) )->resume( $payload['connection'] );
@@ -232,14 +232,6 @@ final class Network {
 		} );
 	}
 
-	private static function legacy_origin(): bool {
-		$legacy = (array) get_network_option( get_current_network_id(), 'pom_ai_mcp_network', array() );
-		if ( ! empty( $legacy['enabled'] ) ) { return true; }
-		$basename = 'pom-ai/pom-ai.php';
-		$active = (array) get_network_option( get_current_network_id(), 'active_sitewide_plugins', array() );
-		if ( ! isset( $active[ $basename ] ) && ! in_array( $basename, (array) get_option( 'active_plugins', array() ), true ) ) { return false; }
-		return \POMFramework\POM_Framework_Settings::is_setting_enabled( 'ai-mcp', 'pom-ai' );
-	}
 
 	/** Preserve the current network entitlement while the platform and products transfer ownership. */
 	private static function entitlement() {
@@ -381,11 +373,6 @@ final class Network {
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'POM MCP Network', 'pom-framework' ); ?></h1>
-			<?php if ( self::legacy_origin() ) : ?>
-				<p><?php esc_html_e( 'This network already has a POM AI MCP owner. Manage its connection in the existing network settings.', 'pom-framework' ); ?></p>
-			</div>
-				<?php return; ?>
-			<?php endif; ?>
 			<p><?php esc_html_e( 'Connect to the main site with OAuth. List each destination explicitly. Its active products determine which operations are available.', 'pom-framework' ); ?></p>
 			<form method="post" action="<?php echo esc_url( get_admin_url( self::main(), 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="<?php echo esc_attr( self::ACTION ); ?>">
@@ -409,7 +396,6 @@ final class Network {
 	public function save(): void {
 		if ( get_current_blog_id() !== self::main() || ! current_user_can( 'manage_network_options' ) || ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'POST' ) { wp_die( 'Network administrator permission is required.' ); }
 		check_admin_referer( self::ACTION );
-		if ( self::legacy_origin() ) { wp_die( esc_html__( 'An existing POM AI MCP owner manages this network.', 'pom-framework' ), '', array( 'response' => 409 ) ); }
 		$raw = isset( $_POST['sites'] ) && is_string( $_POST['sites'] ) ? wp_unslash( $_POST['sites'] ) : '';
 		$values = preg_split( '/\s+/', trim( $raw ), -1, PREG_SPLIT_NO_EMPTY );
 		if ( strlen( $raw ) > 65536 || count( $values ) > 5000 ) { wp_die( 'List up to 5,000 destination site IDs.' ); }

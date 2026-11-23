@@ -16,9 +16,13 @@ final class Registry {
 		$this->providers[ $id ] = array( 'label' => $label, 'operations' => $operations, 'items' => $items );
 	}
 
+	private function active_providers(): array {
+		return AccountGateway::registered() ? array_intersect_key( $this->providers, array( AccountGateway::PROVIDER => true ) ) : $this->providers;
+	}
+
 	public function providers(): array {
 		$labels = array();
-		foreach ( $this->providers as $id => $provider ) {
+		foreach ( $this->active_providers() as $id => $provider ) {
 			$labels[ $id ] = $provider['label'];
 		}
 		ksort( $labels );
@@ -29,7 +33,7 @@ final class Registry {
 		$this->frozen = true;
 		$operations = array( $context->name => $context );
 		$names = array_fill_keys( array_merge( array( $context->name ), Reviews::TOOL_NAMES ), true );
-		$providers = $this->providers;
+		$providers = $this->active_providers();
 		ksort( $providers );
 		foreach ( $providers as $provider ) {
 			$descriptors = $provider['operations'] === null ? array() : ( $provider['operations'] )();
@@ -57,7 +61,7 @@ final class Registry {
 	/** Resolve items after WordPress and all destination components are initialized. */
 	public function items(): array {
 		$items = array();
-		foreach ( $this->providers as $provider ) {
+		foreach ( $this->active_providers() as $provider ) {
 			if ( $provider['items'] === null ) { continue; }
 			foreach ( ( $provider['items'] )() as $item ) {
 				if ( ! $item instanceof Catalog_Item ) { throw new \UnexpectedValueException( 'Invalid POM MCP catalogue item.' ); }

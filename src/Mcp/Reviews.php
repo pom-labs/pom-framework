@@ -87,19 +87,31 @@ final class Reviews {
 			&& Settings::writes_enabled() && in_array( Settings::WRITE_SCOPE, $actor['scopes'] ?? array(), true );
 	}
 
+	public function account_operations(): array {
+		$result = array();
+		foreach ( $this->operations as $operation ) {
+			if ( AccountDestination::allows( $operation ) ) {
+				$result[] = array( 'name' => $operation->name, 'description' => $operation->description, 'inputSchema' => $operation->schema );
+			}
+		}
+		return $result;
+	}
+
 	public function inspect_operation( array $input, array $actor ) {
 		$operation = $this->operations[ $input['operation'] ] ?? null;
-		return $operation ? self::preview_operation( $operation, $input['arguments'], $actor, false ) : $this->unavailable();
+		return $operation && ( ! AccountDestination::actor( $actor ) || AccountDestination::allows( $operation ) )
+			? self::preview_operation( $operation, $input['arguments'], $actor, false ) : $this->unavailable();
 	}
 
 	public function prepare( array $input, array $actor ) {
 		$name = $input['operation'];
 		$args = $input['arguments'];
 		$operation = $this->operations[ $name ] ?? null;
-		if ( ! $operation ) { return $this->unavailable(); }
+		if ( ! $operation || ( AccountDestination::actor( $actor ) && ! AccountDestination::allows( $operation ) ) ) { return $this->unavailable(); }
 		$preview = self::preview_operation( $operation, $args, $actor );
 		if ( is_wp_error( $preview ) ) { return $preview; }
-		$record = self::record( $operation->label, $name, $args, $preview, $actor, $operation->effect === Operation::COST ? 'web' : ( $input['review_mode'] ?? 'auto' ) );
+		$mode = $operation->effect === Operation::COST || AccountDestination::actor( $actor ) ? 'web' : ( $input['review_mode'] ?? 'auto' );
+		$record = self::record( $operation->label, $name, $args, $preview, $actor, $mode );
 		$id = $this->store->create( $record );
 		return is_wp_error( $id ) ? $id : self::describe( $id, $record );
 	}
@@ -147,7 +159,7 @@ final class Reviews {
 			if ( ! $this->authorizes( $actor ) || ! $this->owns( $stored[0], $actor ) || isset( $stored[0]['network'] ) || ! hash_equals( $row['owner'], self::owner( $actor ) ) ) { return $this->unavailable(); }
 			$entry = $stored[0]['entries'][0];
 			$operation = $this->operations[ $entry['tool'] ] ?? null;
-			if ( ! $operation ) { return $this->unavailable(); }
+			if ( ! $operation || ( AccountDestination::actor( $actor ) && ! AccountDestination::allows( $operation ) ) ) { return $this->unavailable(); }
 			$preview = self::preview_operation( $operation, $entry['arguments'], $actor );
 			if ( is_wp_error( $preview ) ) { return $preview; }
 			if ( ! $this->authorizes( $this->tokens->resume( $reference ) ) ) { return $this->unavailable(); }

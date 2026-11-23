@@ -20,15 +20,15 @@ $oauth_fields = array( 'response_type', 'client_id', 'redirect_uri', 'scope', 's
 	<title><?php esc_html_e( 'Authorize POM MCP', 'pom-framework' ); ?></title>
 	<?php wp_admin_css( 'login', true ); ?>
 	<style>
-		.pom-ai-mcp-consent { max-width: 520px; margin: 8vh auto; background: #fff; border: 1px solid #dcdcde; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 24px; }
-		.pom-ai-mcp-consent h1 { margin-top: 0; font-size: 22px; }
-		.pom-ai-mcp-consent code { word-break: break-all; }
-		.pom-ai-mcp-consent__actions { display: flex; gap: 10px; align-items: center; margin: 18px 0; }
-		.pom-ai-mcp-consent__actions button { border: none;background: #000;color: #fff;padding: 15px 30px;cursor:pointer; }
+		.pom-mcp-consent { max-width: 520px; margin: 8vh auto; background: #fff; border: 1px solid #dcdcde; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 24px; }
+		.pom-mcp-consent h1 { margin-top: 0; font-size: 22px; }
+		.pom-mcp-consent code { word-break: break-all; }
+		.pom-mcp-consent__actions { display: flex; gap: 10px; align-items: center; margin: 18px 0; }
+		.pom-mcp-consent__actions button { border: none;background: #000;color: #fff;padding: 15px 30px;cursor:pointer; }
 	</style>
 </head>
 <body class="login">
-	<div class="pom-ai-mcp-consent">
+	<div class="pom-mcp-consent">
 		<h1><?php esc_html_e( 'Authorize POM MCP access', 'pom-framework' ); ?></h1>
 		<p style="margin-bottom: 0.5rem;">
 			<?php
@@ -52,6 +52,12 @@ $oauth_fields = array( 'response_type', 'client_id', 'redirect_uri', 'scope', 's
 		<?php if ( in_array( \POMFramework\Mcp\Network::READ, $data['scopes'], true ) ) : ?>
 			<p><?php esc_html_e( 'This connection can also read the destinations enabled in POM MCP Network Settings. Any granted network writes are limited to enabled groups and require a separate decision on this main site.', 'pom-framework' ); ?></p>
 		<?php endif; ?>
+		<?php if ( \POMFramework\Mcp\AccountGateway::registered() ) : ?>
+			<p><?php esc_html_e( 'This agent can use websites connected separately in My Account, including websites you connect later. Access to each site is limited by the site’s own authorization.', 'pom-framework' ); ?></p>
+		<?php endif; ?>
+		<?php if ( in_array( \POMFramework\Mcp\AccountDestination::SCOPE, $data['scopes'], true ) ) : ?>
+			<p><?php esc_html_e( 'This account connection uses the site’s authoring catalogue. Approve each requested change from a signed-in WordPress session on this site.', 'pom-framework' ); ?></p>
+		<?php endif; ?>
 
 			<form method="post">
 				<?php wp_nonce_field( 'pom_mcp_oauth_authorize', 'pom_mcp_oauth_nonce' ); ?>
@@ -65,7 +71,7 @@ $oauth_fields = array( 'response_type', 'client_id', 'redirect_uri', 'scope', 's
 					?>
 					<input type="hidden" name="<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $value ); ?>">
 				<?php endforeach; ?>
-			<div class="pom-ai-mcp-consent__actions">
+			<div class="pom-mcp-consent__actions">
 				<button type="submit" name="approve" value="1" class="button button-primary button-large"><?php esc_html_e( 'Authorize', 'pom-framework' ); ?></button>
 				<button type="submit" name="deny" value="1" class="button button-secondary button-large"><?php esc_html_e( 'Deny', 'pom-framework' ); ?></button>
 			</div>

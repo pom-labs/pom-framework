@@ -21,6 +21,7 @@ final class Server {
 	private array $registered = array();
 	private array $components = array();
 	private array $component_names = array();
+	private array $account_items = array( 'resources' => array(), 'prompts' => array() );
 	/** @var callable|null */
 	private $items;
 	private int $blog;
@@ -65,7 +66,7 @@ final class Server {
 	public function register_abilities(): void {
 		foreach ( $this->operations as $operation ) {
 			$id = 'pom-mcp/' . str_replace( '_', '-', $operation->name );
-			$reviewed_change = in_array( $operation->name, array( 'pom_prepare_review', 'pom_apply_review', 'pom_network_execute_site' ), true );
+			$reviewed_change = in_array( $operation->name, array( 'pom_prepare_review', 'pom_apply_review', 'pom_network_execute_site', 'pom_account_execute_site' ), true );
 			$ability = wp_register_ability( $id, array(
 				'label' => $operation->label,
 				'description' => $operation->description,
@@ -86,7 +87,7 @@ final class Server {
 				'meta' => array(
 					'public' => false,
 					'show_in_rest' => false,
-					'annotations' => array( 'readonly' => ! $reviewed_change, 'destructive' => $operation->name === 'pom_apply_review', 'idempotent' => ! $reviewed_change ),
+					'annotations' => array( 'readonly' => ! $reviewed_change, 'destructive' => in_array( $operation->name, array( 'pom_apply_review', 'pom_account_execute_site' ), true ), 'idempotent' => ! $reviewed_change ),
 				),
 			) );
 			if ( $ability ) {
@@ -114,7 +115,7 @@ final class Server {
 				}
 			}
 			$permission = function () use ( $item ) {
-				return $this->is_actor_current() && ( $item->permission )() === true;
+				return $this->is_actor_current() && ( ! AccountDestination::actor( $this->actor ) || $item->delegated ) && ( $item->permission )() === true;
 			};
 			$registered = wp_register_ability( $id, array(
 				'label' => $item->name, 'description' => $item->description, 'category' => 'pom-mcp',
@@ -128,6 +129,9 @@ final class Server {
 			if ( $registered ) {
 				$this->components[ $item->kind ][] = $id;
 				$this->component_names[ $id ] = $item->name;
+				if ( $item->delegated ) {
+					$this->account_items[ $item->kind . 's' ][ $item->uri ?: $item->name ] = true;
+				}
 			}
 		}
 	}
@@ -149,7 +153,7 @@ final class Server {
 		try {
 			// Construct only the HTTP server. The adapter singleton would also bootstrap its generic executor.
 			$transport = new McpServer(
-				'pom-mcp', Settings::REST_NAMESPACE, 'mcp', 'POM MCP',
+				'pom-mcp', Settings::REST_NAMESPACE, 'mcp', AccountGateway::registered() ? 'Pomatio Account MCP' : 'POM MCP',
 				'Operations provided by the POM products active on this WordPress site.', self::VERSION,
 				array( HttpTransport::class ), null, null, array_keys( $this->registered ),
 				$this->components[ Catalog_Item::RESOURCE ] ?? array(), $this->components[ Catalog_Item::PROMPT ] ?? array(),
@@ -179,6 +183,11 @@ final class Server {
 					'oauth_enabled' => Settings::oauth_available(),
 					'api_key_enabled' => (bool) Settings::get()['api_key'],
 					'contract_version' => Bootstrap::API_VERSION,
+					'account_destination' => array(
+						'version' => AccountDestination::VERSION,
+						'enabled' => AccountDestination::enabled(),
+						'reviewed_writes' => $this->reviews !== null && (bool) $this->reviews->account_operations(),
+					),
 				), $this->transport === null ? 503 : 200 );
 			},
 		) );
@@ -289,6 +298,9 @@ final class Server {
 		if ( ! $this->is_actor_current() || $operation->effect !== Operation::READ ) {
 			return new WP_Error( 'pom_mcp_forbidden', 'An authenticated POM MCP read request is required.', array( 'status' => 403 ) );
 		}
+		if ( AccountDestination::actor( $this->actor ) && ! AccountDestination::allows_tool( $operation, $this->actor ) ) {
+			return new WP_Error( 'pom_mcp_account_scope', 'This operation is unavailable to account connections.', array( 'status' => 403 ) );
+		}
 		if ( $operation->name !== 'pom_get_task' && in_array( $operation->name, Reviews::TOOL_NAMES, true ) && ( ! $this->reviews || ! $this->reviews->authorizes( $this->actor ) ) ) {
 			return new WP_Error( 'pom_mcp_write_scope', 'An OAuth grant with reviewed write access is required.', array( 'status' => 403 ) );
 		}
@@ -314,11 +326,57 @@ final class Server {
 			|| ! empty( $data['error'] ) || ! empty( $result['isError'] );
 		$payload = $request->get_json_params();
 		$method = is_string( $payload['method'] ?? null ) ? $payload['method'] : '';
+		if ( $response instanceof WP_REST_Response && AccountGateway::registered() && $method === 'tools/list'
+			&& ! in_array( AccountGateway::EXECUTE, $actor['scopes'] ?? array(), true ) && isset( $result['tools'] ) ) {
+			$result['tools'] = array_values( array_filter( $result['tools'], static fn( $item ) => ( (array) $item )['name'] !== 'pom_account_execute_site' ) );
+			$data['result'] = $result;
+			$response->set_data( $data );
+		}
+		if ( $response instanceof WP_REST_Response && AccountDestination::actor( $actor ) && isset( $data['result'] ) ) {
+			$response->set_data( $this->account_catalogue( $data, $method, $actor ) );
+		}
 		$tool = $payload['params']['name'] ?? null;
 		$action = $method === 'tools/call' && is_string( $tool ) && in_array( $tool, $this->registered, true )
 			? $tool : ( $method === 'initialize' ? 'initialize' : 'mcp_request' );
 		$this->logger->record( $action, $failed ? 'error' : 'success', $actor );
 		return $response;
+	}
+
+	private function account_catalogue( array $data, string $method, array $actor ): array {
+		// The adapter may decode its protocol DTOs as stdClass objects.
+		$result = (array) $data['result'];
+		if ( $method === 'tools/list' && isset( $result['tools'] ) ) {
+			$writes = $this->reviews && in_array( Settings::WRITE_SCOPE, $actor['scopes'], true ) ? $this->reviews->account_operations() : array();
+			$tools = array();
+			foreach ( $result['tools'] as $tool ) {
+				$tool = (array) $tool;
+				$name = $tool['name'] ?? '';
+				if ( ! isset( $this->operations[ $name ] ) || ! AccountDestination::allows_tool( $this->operations[ $name ], $actor ) ) { continue; }
+				if ( in_array( $name, array( 'pom_preview_operation', 'pom_prepare_review' ), true ) ) {
+					if ( ! $writes ) { continue; }
+					$schema = (array) $tool['inputSchema'];
+					$properties = (array) $schema['properties'];
+					$operation = (array) $properties['operation'];
+					$operation['enum'] = array_column( $writes, 'name' );
+					$properties['operation'] = $operation;
+					$schema['properties'] = $properties;
+					$tool['inputSchema'] = $schema;
+				}
+				$tools[] = $tool;
+			}
+			$result['tools'] = $tools;
+			// Supply the inner contracts separately from the review tools that accept them.
+			$result['_meta'] = (array) ( $result['_meta'] ?? array() );
+			$result['_meta']['pom/account-reviewed-operations'] = $writes;
+			$data['result'] = $result;
+		}
+		foreach ( array( 'resources' => 'uri', 'prompts' => 'name' ) as $kind => $key ) {
+			if ( $method === $kind . '/list' && isset( $result[ $kind ] ) ) {
+				$result[ $kind ] = array_values( array_filter( $result[ $kind ], fn( $item ) => isset( $this->account_items[ $kind ][ ( (array) $item )[ $key ] ?? '' ] ) ) );
+				$data['result'] = $result;
+			}
+		}
+		return $data;
 	}
 
 	public function add_response_headers( $response, WP_REST_Server $rest, WP_REST_Request $request ) {

@@ -169,6 +169,8 @@ final class TokenStore {
 
 	public function validate_access_token( string $token ): array {
 		global $wpdb;
+		// Revocation and rotation must be visible before an authenticated read.
+		if ( function_exists( 'pom_pomstandard_force_database_reads_to_writer' ) ) { pom_pomstandard_force_database_reads_to_writer(); }
 
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
@@ -207,6 +209,9 @@ final class TokenStore {
 		if ( ! Settings::actor_can_connect( (int) $row['user_id'] ) ) {
 			return array();
 		}
+		$scopes = isset( $row['scope'] ) ? preg_split( '/\s+/', (string) $row['scope'] ) : array();
+		if ( ! AccountGateway::allows( $scopes )
+			|| ( in_array( AccountDestination::SCOPE, $scopes, true ) && ! AccountDestination::enabled() ) ) { return array(); }
 
 		return array(
 			'auth_type' => 'oauth',
@@ -214,7 +219,7 @@ final class TokenStore {
 			'grant_fingerprint' => hash_hmac( 'sha256', wp_json_encode( array( $row['id'], $row['blog_id'], $row['user_id'], $row['client_id'], $row['created_at'], $row['resource'], $row['scope'] ) ), wp_salt( 'auth' ) ),
 			'user_id'   => (int) $row['user_id'],
 			'client_id' => (string) $row['client_id'],
-			'scopes'    => isset( $row['scope'] ) ? preg_split( '/\s+/', (string) $row['scope'] ) : array(),
+			'scopes'    => $scopes,
 			'resource'  => (string) $row['resource'],
 			'rate_key'  => 'oauth:' . (string) $row['client_id'] . ':' . (int) $row['user_id'],
 		);
@@ -251,8 +256,7 @@ final class TokenStore {
 			if ( ! $row || ! $this->grant_context( $row ) || ! hash_equals( (string) $row['token_hash'], $this->hash_token( $access_token ) ) || ! hash_equals( (string) $row['refresh_token_hash'], $this->hash_token( $next_refresh ) ) ) { return array(); }
 			return array( 'access_token' => $access_token, 'refresh_token' => $next_refresh, 'token_type' => 'Bearer', 'expires_in' => max( 0, strtotime( $row['expires_at'] . ' UTC' ) - time() ), 'scope' => (string) $row['scope'] );
 		}
-		if ( strcmp( (string) $row['refresh_expires_at'], gmdate( 'Y-m-d H:i:s' ) ) < 0 || (string) $row['resource'] !== $resource
-			|| ! Settings::actor_can_connect( (int) $row['user_id'] ) ) {
+		if ( (string) $row['resource'] !== $resource || ! $this->grant_context( $row, 'refresh_expires_at' ) ) {
 			return array();
 		}
 
@@ -283,14 +287,7 @@ final class TokenStore {
 
 	/** Revoke both credentials in one grant without affecting other clients. */
 	public function revoke( string $token, string $client_id ) {
-		return $this->with_client_lock( $client_id, function () use ( $token, $client_id ) {
-			global $wpdb;
-			$hash = $this->hash_token( $token );
-			return $wpdb->query( $wpdb->prepare(
-				"UPDATE {$this->storage->tokens_table()} SET revoked_at = %s WHERE client_id = %s AND blog_id = %d AND revoked_at IS NULL AND (token_hash = %s OR refresh_token_hash = %s)",
-				current_time( 'mysql', true ), $client_id, get_current_blog_id(), $hash, $hash
-			) ) !== false;
-		} );
+		return $this->storage->revoke_grant( $token, $client_id, Settings::endpoint() );
 	}
 
 	/** Serialize exchange and owner revocation so rotation cannot restore removed access. */

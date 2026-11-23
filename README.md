@@ -737,13 +737,17 @@ By mirroring the input type you ensure the runtime value has been filtered by th
 
 ## POM MCP
 
+The **Connection** section shows the shared server URL. With pretty permalinks its transport is `/wp-json/pom-mcp/v1/mcp` and its OAuth routes are under `/pom-mcp/oauth/`. Create each connection from this screen or from Pomatio My Account using the new URL and a fresh authorization.
+
 Products can register with POM MCP to share one site-level server and one **Settings → POM MCP** page. The server is disabled on a new site. A site administrator enables it, selects the authentication methods, and copies the connection URL from that page. WordPress 6.9 or later, a compatible WordPress MCP Adapter 0.6.1 series package, and HTTPS are required. HTTP loopback is supported for local development.
 
-OAuth requires pretty permalinks and a WordPress account with access to the site. The client uses OAuth discovery and authorization code with PKCE and requests `mcp:read`. For a header-based connection, enable **Allow API key**, save the ID of an existing service user, then select **Generate or rotate API key**. Copy the key while it is displayed and send it in the `X-POM-AI-MCP-API-Key` header. The endpoint shown in Settings also supports header-based access on sites with plain permalinks.
+OAuth requires pretty permalinks and a WordPress account with access to the site. The client uses OAuth discovery and authorization code with PKCE and requests `mcp:read`. For a header-based connection, enable **Allow API key**, save the ID of an existing service user, then select **Generate or rotate API key**. Copy the key while it is displayed and send it in the `X-POM-MCP-API-Key` header. The endpoint shown in Settings also supports header-based access on sites with plain permalinks.
 
 If a site's home URL contains a path, map the standard authorization metadata URL `/.well-known/oauth-authorization-server/site-path` to `/site-path/.well-known/oauth-authorization-server` at the web server. Request the standard URL and verify that the JSON `issuer` matches the site's home URL. Header-based access works with the endpoint shown in Settings.
 
-**Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** records connection outcomes and operation names. Settings, credentials and activity belong to the current site in a multisite network. A recognized POM AI MCP or existing network policy keeps control of its connection settings.
+**Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** records connection outcomes and operation names. Settings, credentials and activity belong to the current site in a multisite network.
+
+If a client loses the response to a token refresh and immediately disconnects, the OAuth revocation endpoint can still revoke the replacement grant using the previous refresh token during the short refresh recovery window.
 
 ### Register a product
 
@@ -769,6 +773,8 @@ The optional fourth argument to `register_provider()` returns `POMFramework\Mcp\
 
 The built-in `pom_get_site_context` tool returns the site identity, registered product identifiers, multisite status and contract version. Use it to verify the connection and its destination.
 
+The selected Framework bootstrap keeps its MCP classes together when another active product registers an older Composer loader. Bundle the same Framework revision in all current POM MCP products so the first registered provider can start the reviewed runtime.
+
 ### Review a change
 
 On a site with a product that supplies reviewed writes, enable **Allow reviewed changes through OAuth** in **Settings → POM MCP**. Connect using OAuth with `mcp:read` and `mcp:write`. API keys continue to have read access.
@@ -777,7 +783,7 @@ On a site with a product that supplies reviewed writes, enable **Allow reviewed 
 2. Call `pom_apply_review` with the approved `review_id`. It returns a task receipt. The background worker checks the original connection, current permissions and the exact preview before applying the operation.
 3. Poll `pom_get_task` using the returned ID. The receipt belongs to the same connection and site. Inspect the destination before repeating an uncertain operation.
 
-Approval leaves the site unchanged until its task runs. The site's normal WordPress cron must run for the worker to apply a queued operation. Turning off reviewed changes prevents new application requests and prevents queued changes from running while the setting is off. The existing POM AI connection keeps its approval links and pending tasks during updates.
+Approval leaves the site unchanged until its task runs. The site's normal WordPress cron must run for the worker to apply a queued operation. Turning off reviewed changes prevents new application requests and prevents queued changes from running while the setting is off.
 
 ### Product-owned editorial and settings operations
 
@@ -787,7 +793,7 @@ Site Tweaks can use the shared settings writer for reviewed patch operations. A 
 
 ### Delegate to selected WordPress Multisite destinations
 
-Open **Network Admin → Settings → POM MCP** from the main site. Enable network delegation and list the allowed destination site IDs. Network jobs require a current POM AI Unlimited entitlement and an authorized domain on the main site. Each destination needs an active POM product that provides the requested operation. Worker eligibility can be extended through `pom_mcp_network_worker_available`; check that the supplied destination will bootstrap the relevant product and shared worker. The destination's own POM MCP connection can stay disabled. An existing POM AI network keeps its existing controls.
+Open **Network Admin → Settings → POM MCP** from the main site. Enable network delegation and list the allowed destination site IDs. Network jobs require a current POM AI Unlimited entitlement and an authorized domain on the main site. Each destination needs an active POM product that provides the requested operation. Worker eligibility can be extended through `pom_mcp_network_worker_available`; check that the supplied destination will bootstrap the relevant product and shared worker. The destination's own POM MCP connection can stay disabled.
 
 1. On the main site, enable **POM MCP** with OAuth. A network administrator consents to `mcp:read` and `network:sites:read`.
 2. Call `pom_network_list_sites`, follow `next_after_blog_id` when present, choose the intended site, then discover its tools, resources or prompts with `pom_network_discover_site`. Read an item with `pom_network_read_site`.
@@ -796,9 +802,17 @@ Open **Network Admin → Settings → POM MCP** from the main site. Enable netwo
 
 The destination's normal WordPress cron runs the job with the original actor's current permissions. Changes to the destination, policy or connection can invalidate queued work. A network integration may add a check through `pom_mcp_network_entitlement`, which receives the current decision, destination blog ID and whether the job concerns a write. Preserve an earlier denial and return `true` only to allow the job. The filter runs in the network main site's storage context. Pomatio retains its independent account connections.
 
+### Connect a site to a Pomatio account
+
+On a compatible HTTPS site, enable **Allow Pomatio account connections** in **Settings → POM MCP** with OAuth and pretty permalinks enabled. Enable **Allow reviewed changes through OAuth** if the account needs to request changes. Use My Account to connect that website and complete consent as the intended WordPress user. Each subsite has its own authorization.
+
+Account clients request `mcp:read` and `account:destination`, plus `mcp:write` for reviewed changes. This connection uses the published authoring catalogue and requires a signed-in WordPress decision for every change. Site-local product operations and network delegation use their own connections. When replacing a previous website connection, disconnect it in My Account and authorize a new one.
+
+Pomatio’s account origin uses the same endpoint with a dedicated account routing catalogue. Enable the server and OAuth in **Settings → POM MCP** on the account origin. Agent scopes are `mcp:read` and `account:sites:read`, with `mcp:write` and `account:sites:execute` for reviewed destination execution. The destination still requires its own authorization and approval.
+
 ### Run product background jobs
 
-`POMFramework\Jobs\Queue` provides a shared installation-wide worker. Register a named kind with `Queue::register( $kind, $handler, $site_eligible )` from the loading product. The handler receives the saved arguments and job record on the destination site. The optional eligibility callback receives a blog ID and should verify that the destination can load the product. Use `Queue::hooks()` once the consumer loads and before handling its cron events. `Queue::enqueue()` accepts a kind, JSON-compatible arguments, a stable 64-character hex owner fingerprint, an optional destination blog, and an optional 32-character hex request ID for retries. Generate owner fingerprints from the authenticated connection and original site. `Queue::status()` returns receipts only for that owner on the submitting site. The worker shares legacy task identifiers and scheduled events so a pending POM AI operation remains readable after updating Framework.
+`POMFramework\Jobs\Queue` provides a shared installation-wide worker. Register a named kind with `Queue::register( $kind, $handler, $site_eligible )` from the loading product. The handler receives the saved arguments and job record on the destination site. The optional eligibility callback receives a blog ID and should verify that the destination can load the product. Use `Queue::hooks()` once the consumer loads and before handling its cron events. `Queue::enqueue()` accepts a kind, JSON-compatible arguments, a stable 64-character hex owner fingerprint, an optional destination blog, and an optional 32-character hex request ID for retries. Generate owner fingerprints from the authenticated connection and original site. `Queue::status()` returns receipts only for that owner on the submitting site.
 
 
 ## Product licensing client

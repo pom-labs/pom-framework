@@ -26,7 +26,7 @@ final class Admin {
 	}
 
 	public function handle(): void {
-		if ( ! current_user_can( 'manage_options' ) || ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'POST' || $this->bootstrap->legacy_owner() ) {
+		if ( ! current_user_can( 'manage_options' ) || ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'POST' ) {
 			wp_die( esc_html__( 'You cannot change POM MCP settings on this site.', 'pom-framework' ), '', array( 'response' => 403 ) );
 		}
 		check_admin_referer( self::ACTION );
@@ -67,7 +67,8 @@ final class Admin {
 			'enabled' => self::field( 'enabled' ) === '1',
 			'oauth' => self::field( 'oauth' ) === '1',
 			'writes' => self::field( 'writes' ) === '1',
-			'api_key' => self::field( 'api_key' ) === '1',
+			'account_destination' => ! AccountGateway::registered() && self::field( 'account_destination' ) === '1',
+			'api_key' => ! AccountGateway::registered() && self::field( 'api_key' ) === '1',
 			'service_user' => absint( self::field( 'service_user' ) ),
 			'rate_limit' => max( 1, min( 600, absint( self::field( 'rate_limit' ) ) ) ),
 			'origins' => array(),
@@ -134,51 +135,37 @@ final class Admin {
 			wp_die( esc_html__( 'You cannot manage POM MCP on this site.', 'pom-framework' ), '', array( 'response' => 403 ) );
 		}
 		$settings = Settings::get();
-		$owner = $this->bootstrap->runtime_owner();
-		$legacy = $owner !== 'framework';
-		$requirements = $legacy ? '' : $this->bootstrap->requirements();
+		$requirements = $this->bootstrap->requirements();
 		$problem = $this->bootstrap->problem() ?: $requirements;
 		$storage = new Storage();
-		$runtime = array(
-			'account' => __( 'Existing POM account gateway', 'pom-framework' ),
-			'site' => __( 'Existing POM AI site server', 'pom-framework' ),
-			'network' => __( 'Existing network delegation policy', 'pom-framework' ),
-			'framework' => __( 'POM Framework', 'pom-framework' ),
-		);
 		?>
 		<div class="wrap">
 			<h1>POM MCP</h1>
 			<?php if ( isset( $_GET['pom_mcp_saved'] ) && $_GET['pom_mcp_saved'] === '1' ) : ?>
 				<div class="notice notice-success"><p><?php esc_html_e( 'POM MCP settings updated.', 'pom-framework' ); ?></p></div>
 			<?php endif; ?>
-			<?php if ( $legacy ) : ?>
-				<div class="notice notice-info"><p><?php esc_html_e( 'Existing settings control connections on this site.', 'pom-framework' ); ?></p></div>
-			<?php elseif ( $problem !== '' ) : ?>
+			<?php if ( $problem !== '' ) : ?>
 				<div class="notice notice-warning"><p><?php echo esc_html( $problem ); ?></p></div>
 			<?php endif; ?>
 			<h2><?php esc_html_e( 'Connection', 'pom-framework' ); ?></h2>
-			<p><?php echo esc_html( sprintf( __( 'Connection controller: %s', 'pom-framework' ), $runtime[$owner] ) ); ?></p>
+			<p><?php echo esc_html( sprintf( __( 'Connection controller: %s', 'pom-framework' ), AccountGateway::registered() ? 'Pomatio Account' : 'POM Framework' ) ); ?></p>
 			<p><code><?php echo esc_html( Settings::endpoint() ); ?></code></p>
-			<?php if ( $legacy ) : ?>
-				<p><?php esc_html_e( 'Manage existing connection settings from the POM AI or Network Admin screen.', 'pom-framework' ); ?></p>
-			<?php endif; ?>
 			<h2><?php esc_html_e( 'Products', 'pom-framework' ); ?></h2>
 			<ul class="ul-disc">
 				<?php foreach ( $this->bootstrap->providers() as $label ) : ?>
 					<li><?php echo esc_html( $label ); ?></li>
 				<?php endforeach; ?>
 			</ul>
-			<?php if ( ! $legacy ) : ?>
-				<?php $this->render_settings( $settings, $requirements ); ?>
-				<?php if ( $storage->ready() ) : ?>
-					<?php $this->render_connections( $settings, $storage ); ?>
-				<?php endif; ?>
+			<?php $this->render_settings( $settings, $requirements ); ?>
+			<?php if ( $storage->ready() ) : ?>
+				<?php $this->render_connections( $settings, $storage ); ?>
 			<?php endif; ?>
 		</div>
 		<?php
 	}
 
 	private function render_settings( array $settings, string $requirements ): void {
+		$gateway = AccountGateway::registered();
 		?>
 		<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
 			<?php self::form_fields( 'save' ); ?>
@@ -190,8 +177,8 @@ final class Admin {
 				<tr>
 					<th scope="row"><?php esc_html_e( 'Authentication', 'pom-framework' ); ?></th>
 					<td>
-						<label><input type="checkbox" name="oauth" value="1" <?php checked( $settings['oauth'] ); ?>> <?php esc_html_e( 'Allow OAuth', 'pom-framework' ); ?></label><br>
-						<label><input type="checkbox" name="api_key" value="1" <?php checked( $settings['api_key'] ); ?>> <?php esc_html_e( 'Allow API key', 'pom-framework' ); ?></label>
+						<label><input type="checkbox" name="oauth" value="1" <?php checked( $settings['oauth'] ); ?>> <?php esc_html_e( 'Allow OAuth', 'pom-framework' ); ?></label>
+						<?php if ( ! $gateway ) : ?><br><label><input type="checkbox" name="api_key" value="1" <?php checked( $settings['api_key'] ); ?>> <?php esc_html_e( 'Allow API key', 'pom-framework' ); ?></label><?php endif; ?>
 						<?php if ( ! get_option( 'permalink_structure' ) ) : ?>
 							<p class="description"><?php esc_html_e( 'OAuth requires pretty permalinks.', 'pom-framework' ); ?></p>
 						<?php endif; ?>
@@ -199,12 +186,18 @@ final class Admin {
 				</tr>
 				<tr>
 					<th scope="row"><?php esc_html_e( 'Reviewed changes', 'pom-framework' ); ?></th>
-					<td><label><input type="checkbox" name="writes" value="1" <?php checked( $settings['writes'] ); ?>> <?php esc_html_e( 'Allow reviewed changes through OAuth', 'pom-framework' ); ?></label><p class="description"><?php esc_html_e( 'Each change requires approval and the connected account’s current WordPress permissions.', 'pom-framework' ); ?></p></td>
+					<td><label><input type="checkbox" name="writes" value="1" <?php checked( $settings['writes'] ); ?>> <?php esc_html_e( 'Allow reviewed changes through OAuth', 'pom-framework' ); ?></label><p class="description"><?php echo esc_html( $gateway ? __( 'Each change requires authorization and approval on its destination website.', 'pom-framework' ) : __( 'Each change requires approval and the connected account’s current WordPress permissions.', 'pom-framework' ) ); ?></p></td>
+				</tr>
+				<?php if ( ! $gateway ) : ?>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Account connections', 'pom-framework' ); ?></th>
+					<td><label><input type="checkbox" name="account_destination" value="1" <?php checked( $settings['account_destination'] ); ?>> <?php esc_html_e( 'Allow Pomatio account connections', 'pom-framework' ); ?></label><p class="description"><?php esc_html_e( 'Requires OAuth and authorization by a WordPress user. Account connections use the site’s reviewed authoring tools.', 'pom-framework' ); ?></p></td>
 				</tr>
 				<tr>
 					<th scope="row"><label for="pom-mcp-service-user"><?php esc_html_e( 'API key service user ID', 'pom-framework' ); ?></label></th>
 					<td><input id="pom-mcp-service-user" name="service_user" type="number" min="0" value="<?php echo esc_attr( (string) $settings['service_user'] ); ?>"></td>
 				</tr>
+				<?php endif; ?>
 				<tr>
 					<th scope="row"><label for="pom-mcp-rate"><?php esc_html_e( 'Requests per connection per minute', 'pom-framework' ); ?></label></th>
 					<td><input id="pom-mcp-rate" name="rate_limit" type="number" min="1" max="600" value="<?php echo esc_attr( (string) $settings['rate_limit'] ); ?>"></td>

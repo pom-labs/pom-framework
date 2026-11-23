@@ -239,7 +239,7 @@ final class OAuthServer {
 					(string) ( $data['code'] ?? '' ), $client_id, $resource,
 					(string) ( $data['redirect_uri'] ?? '' ), (string) ( $data['code_verifier'] ?? '' )
 				);
-				if ( ! $code_data ) {
+				if ( ! $code_data || ( AccountGateway::registered() && ! AccountGateway::allows( (array) $code_data['scope'] ) ) || ( in_array( AccountDestination::SCOPE, (array) $code_data['scope'], true ) && ! AccountDestination::enabled() ) ) {
 					return new WP_Error( 'invalid_grant', 'Invalid authorization code or PKCE verifier.', array( 'status' => 400 ) );
 				}
 				$tokens = $this->token_store->issue_tokens( $client_id, (int) $code_data['user_id'], (array) $code_data['scope'], $resource );
@@ -283,6 +283,7 @@ final class OAuthServer {
 			$this->json_error( 'temporarily_unavailable', 'Revocation could not be completed. Try again later.', 503 );
 		}
 		// Unknown or already revoked tokens receive the same response.
+		header( 'X-POM-MCP-Account-Destination: ' . AccountDestination::VERSION );
 		$this->json( array() );
 	}
 
@@ -439,14 +440,19 @@ final class OAuthServer {
 
 	private function requested_scopes( $requested ): array {
 		if ( ! is_string( $requested ) ) { return array(); }
-		$scopes = trim( $requested ) === '' ? array( Settings::READ_SCOPE ) : preg_split( '/\s+/', trim( $requested ) );
+		$default = AccountGateway::registered() ? array( Settings::READ_SCOPE, AccountGateway::READ ) : array( Settings::READ_SCOPE );
+		$scopes = trim( $requested ) === '' ? $default : preg_split( '/\s+/', trim( $requested ) );
 		$available = $this->scopes();
+		if ( AccountGateway::registered() && ! AccountGateway::allows( $scopes ) ) { return array(); }
 		return in_array( Settings::READ_SCOPE, $scopes, true ) && ! array_diff( $scopes, $available )
+			&& ( ! in_array( AccountDestination::SCOPE, $scopes, true ) || ! array_intersect( $scopes, array( Network::READ, Network::WRITE ) ) )
 			&& ( ! in_array( Network::WRITE, $scopes, true ) || ! array_diff( array( Network::READ, Settings::WRITE_SCOPE ), $scopes ) )
 			? array_values( array_intersect( $available, $scopes ) ) : array();
 	}
 
 	private function scopes(): array {
-		return array_merge( $this->review_tools ? array( Settings::READ_SCOPE, Settings::WRITE_SCOPE ) : array( Settings::READ_SCOPE ), $this->network_scopes );
+		if ( AccountGateway::registered() ) { return AccountGateway::scopes(); }
+		return array_merge( $this->review_tools ? array( Settings::READ_SCOPE, Settings::WRITE_SCOPE ) : array( Settings::READ_SCOPE ), $this->network_scopes,
+			AccountDestination::enabled() ? array( AccountDestination::SCOPE ) : array() );
 	}
 }

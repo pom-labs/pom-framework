@@ -8,47 +8,26 @@ use WP_Error;
 final class Storage {
 	public const CLEANUP = 'pom_mcp_cleanup';
 	public const CLEANUP_BATCH = 'pom_mcp_cleanup_batch';
-	private bool $legacy;
-	private int $retention;
-
-	public function __construct( bool $legacy = false, int $retention = 30 ) {
-		$this->legacy = $legacy;
-		$this->retention = max( 1, $retention );
-	}
+	private const VERSION_OPTION = 'pom_mcp_storage_version';
+	private const VERSION = '1';
 
 	public function ready(): bool {
-		return (string) get_option( $this->version_option() ) === $this->version();
-	}
-
-	private function version_option(): string {
-		return $this->legacy ? 'pom_ai_mcp_db_version' : 'pom_mcp_storage_version';
-	}
-
-	private function version(): string {
-		return $this->legacy ? '1.0.6' : '1';
+		return (string) get_option( self::VERSION_OPTION ) === self::VERSION;
 	}
 
 	public function install() {
-		$cron = $this->legacy ? 'pom_ai_mcp_token_cleanup' : self::CLEANUP;
+		$cron = self::CLEANUP;
 		if ( $this->ready() && wp_get_schedule( $cron ) === 'hourly' ) { return true; }
 		return $this->locked( 'install', function () use ( $cron ) {
-			$version_option = $this->version_option();
+			$version_option = self::VERSION_OPTION;
 			wp_cache_delete( $version_option, 'options' );
 			wp_cache_delete( 'notoptions', 'options' );
 			if ( ! $this->ready() ) {
-				if ( $this->legacy ) {
-					wp_cache_delete( 'pom_ai_mcp_install_retry_at', 'options' );
-					if ( (int) get_option( 'pom_ai_mcp_install_retry_at', 0 ) > time() ) {
-						return new WP_Error( 'pom_mcp_storage_unavailable', 'POM MCP storage is unavailable. Try again shortly.' );
-					}
-					update_option( 'pom_ai_mcp_install_retry_at', time() + MINUTE_IN_SECONDS, false );
-				}
 				if ( ! $this->create_tables() ) {
 					return new WP_Error( 'pom_mcp_storage_unavailable', 'POM MCP storage could not be created.' );
 				}
-				update_option( $version_option, $this->version(), false );
+				update_option( $version_option, self::VERSION, false );
 				if ( ! $this->ready() ) { return new WP_Error( 'pom_mcp_storage_unavailable', 'POM MCP storage could not be saved.' ); }
-				if ( $this->legacy ) { delete_option( 'pom_ai_mcp_install_retry_at' ); }
 			}
 
 			// Re-read cron under the same writer lock so concurrent setup keeps one event.
@@ -62,12 +41,8 @@ final class Storage {
 		} );
 	}
 
-	/** Preserve the lock identity used by older POM AI releases during upgrades and rollback. */
 	public function with_client_lock( string $client, callable $callback ) {
-		if ( ! $this->legacy ) { return $this->locked( 'oauth:' . $client, $callback ); }
-		$table = $this->tokens_table();
-		$name = 'pom-ai-oauth-' . substr( hash( 'sha256', $table . ':' . get_current_blog_id() . ':' . $client ), 0, 48 );
-		return $this->named_lock( $name, $table, $callback );
+		return $this->locked( 'oauth:' . $client, $callback );
 	}
 
 	/** Serialize setup and OAuth changes on the writer to keep grants and revocation consistent. */
@@ -75,15 +50,42 @@ final class Storage {
 		global $wpdb;
 		$table = $this->tokens_table();
 		$identity = $table . ':' . $scope;
-		if ( $this->legacy && $scope === 'install' ) {
-			$table = $wpdb->base_prefix . 'options';
-			$identity = DB_NAME . ':' . $wpdb->base_prefix . ':schema';
-		} elseif ( strpos( $scope, 'review-admission:' ) === 0 ) {
+		if ( strpos( $scope, 'review-admission:' ) === 0 ) {
 			$table = $wpdb->options;
 			$identity = DB_NAME . ':' . $table . ':' . $scope;
 		}
 		$name = 'pom-mcp-' . substr( hash( 'sha256', $identity ), 0, 48 );
 		return $this->named_lock( $name, $table, $callback );
+	}
+
+	/** Revoke the current grant even if the client lost the last refresh response. */
+	public function revoke_grant( string $token, string $client_id, string $resource ) {
+		return $this->with_client_lock( $client_id, function () use ( $token, $client_id, $resource ) {
+			global $wpdb;
+			$table = $this->tokens_table();
+			$salt = wp_salt( 'auth' );
+			$hash = hash_hmac( 'sha256', $token, $salt );
+			$now = gmdate( 'Y-m-d H:i:s' );
+			$blog = get_current_blog_id();
+			$updated = $wpdb->query( $wpdb->prepare(
+				"UPDATE {$table} SET revoked_at = %s WHERE client_id = %s AND blog_id = %d AND revoked_at IS NULL AND (token_hash = %s OR refresh_token_hash = %s)",
+				$now, $client_id, $blog, $hash, $hash
+			) );
+			$prefix = 'pommcp_rt_';
+			if ( $updated !== 0 || ! preg_match( '/^' . $prefix . '[A-Za-z0-9_-]{43}$/D', $token ) ) { return $updated !== false; }
+
+			$name = $this->prefix() . 'refresh_receipt_' . $hash;
+			$raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $name ) );
+			if ( $wpdb->last_error !== '' ) { return false; }
+			$receipt = is_string( $raw ) ? maybe_unserialize( $raw ) : null;
+			if ( ! is_array( $receipt ) || ( $receipt['expires'] ?? 0 ) < time()
+				|| ( $receipt['client_id'] ?? '' ) !== $client_id || ( $receipt['resource'] ?? '' ) !== $resource ) { return true; }
+			$replacement = $prefix . rtrim( strtr( base64_encode( hash_hmac( 'sha256', "refresh\0" . $token, $salt, true ) ), '+/', '-_' ), '=' );
+			return $wpdb->query( $wpdb->prepare(
+				"UPDATE {$table} SET revoked_at = %s WHERE id = %d AND client_id = %s AND blog_id = %d AND resource = %s AND revoked_at IS NULL AND refresh_token_hash = %s",
+				$now, (int) $receipt['grant_id'], $client_id, $blog, $resource, hash_hmac( 'sha256', $replacement, $salt )
+			) ) !== false;
+		} );
 	}
 
 	private function named_lock( string $name, string $table, callable $callback ) {
@@ -102,7 +104,7 @@ final class Storage {
 	}
 
 	private function prefix(): string {
-		return $this->legacy ? 'pom_ai_mcp_' : 'pom_mcp_';
+		return 'pom_mcp_';
 	}
 
 	/** Read one expiring record at a time and advance an indexed cursor instead of loading large jobs. */
@@ -135,8 +137,6 @@ final class Storage {
 		$rate_table      = $wpdb->prefix . $this->prefix() . 'rate_limits';
 
 		// These fields are still part of the historical logger and registration contract.
-		$legacy_log = $this->legacy ? "client_id varchar(191) NULL,\nrequest_data longtext NULL,\nresponse_data longtext NULL,\nip_hash varchar(191) NULL,\n" : '';
-		$legacy_client = $this->legacy ? "client_secret_hash varchar(255) NULL,\ngrant_types longtext NULL,\nresponse_types longtext NULL,\nlast_used_at datetime NULL,\n" : '';
 
 		dbDelta(
 			array(
@@ -155,7 +155,7 @@ final class Storage {
 					auth_type varchar(40) NOT NULL DEFAULT 'none',
 					action varchar(100) NOT NULL,
 					status varchar(50) NOT NULL DEFAULT 'success',
-					{$legacy_log}PRIMARY KEY  (id),
+					PRIMARY KEY  (id),
 					KEY timestamp (timestamp),
 					KEY action (action),
 					KEY status (status)
@@ -163,7 +163,7 @@ final class Storage {
 				"CREATE TABLE {$clients_table} (
 					id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 					client_id varchar(191) NOT NULL,
-					{$legacy_client}client_name varchar(191) NOT NULL,
+					client_name varchar(191) NOT NULL,
 					redirect_uris longtext NOT NULL,
 					scope longtext NULL,
 					blog_id bigint(20) unsigned NOT NULL DEFAULT 1,
@@ -244,7 +244,7 @@ final class Storage {
 			$wpdb->query( $wpdb->prepare( "DELETE FROM {$target[0]} WHERE {$target[1]} {$target[2]} %s ORDER BY {$target[1]} LIMIT 500", $now ) );
 			$more = $more || $wpdb->rows_affected === 500;
 		}
-		$wpdb->query( $wpdb->prepare( "DELETE FROM {$this->logs_table()} WHERE timestamp < %s ORDER BY timestamp LIMIT 500", gmdate( 'Y-m-d H:i:s', time() - $this->retention * DAY_IN_SECONDS ) ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$this->logs_table()} WHERE timestamp < %s ORDER BY timestamp LIMIT 500", gmdate( 'Y-m-d H:i:s', time() - 30 * DAY_IN_SECONDS ) ) );
 		$more = $more || $wpdb->rows_affected === 500;
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->prefix}{$prefix}rate_limits WHERE expires_at < %d ORDER BY expires_at LIMIT 500", time() ) );
 		$more = $more || $wpdb->rows_affected === 500;

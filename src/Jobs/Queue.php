@@ -14,9 +14,9 @@ use WP_Error;
  */
 final class Queue {
 	public const API_VERSION = 1;
-	public const HOOK = 'pom_ai_run_background_task';
-	private const MAINTENANCE_HOOK = 'pom_ai_background_maintenance';
-	private const SCHEMA = '2';
+	public const HOOK = 'pom_mcp_run_task';
+	private const MAINTENANCE_HOOK = 'pom_mcp_background_maintenance';
+	private const SCHEMA = '1';
 	private const STORAGE_LIMIT = 128 * 1048576;
 	private static array $handlers = array();
 	private static array $eligibility = array();
@@ -28,18 +28,12 @@ final class Queue {
 	private const RETENTION = 3600;
 
 	public static function hooks(): void {
-		if ( self::$hooked || ! self::available() ) { return; }
+		if ( self::$hooked ) { return; }
 		self::$hooked = true;
 		self::$boot_blog = get_current_blog_id();
 		add_action( self::HOOK, array( __CLASS__, 'run' ), 10, 2 );
 		add_action( 'wp_scheduled_delete', array( __CLASS__, 'cleanup' ) );
-		add_action( 'pom_ai_cleanup_background_tasks', array( __CLASS__, 'cleanup' ) );
 		add_action( self::MAINTENANCE_HOOK, array( __CLASS__, 'maintenance' ) );
-	}
-
-	/** An older POM AI can coexist until it is ready to leave the cron hooks to Framework. */
-	public static function available(): bool {
-		return ! class_exists( '\\POM_AI_Background_Tasks', false ) || is_a( '\\POM_AI_Background_Tasks', self::class, true );
 	}
 
 	public static function register( string $kind, callable $handler, ?callable $eligible = null ): void {
@@ -51,28 +45,19 @@ final class Queue {
 	}
 	public static function running(): bool { return self::$running; }
 
-	/** Existing bounded cron batches share the same installation-wide execution slot. */
-	public static function cron_batch( callable $callback ): bool {
-		if ( self::$running ) { $callback(); return true; }
-		if ( ! self::lock( 'execution' ) ) { return false; }
-		self::$running = true;
-		try { $callback(); return true; }
-		finally { self::$running = false; self::lock( 'execution', true ); self::dispatch(); }
-	}
-
 	private static function table(): string {
 		global $wpdb;
 		if ( function_exists( 'pom_pomstandard_force_database_reads_to_writer' ) ) { pom_pomstandard_force_database_reads_to_writer(); }
-		return $wpdb->base_prefix . 'pom_ai_tasks';
+		return $wpdb->base_prefix . 'pom_mcp_tasks';
 	}
 
 	/** One installation-wide table, created once without inspecting the table catalog. */
 	private static function install(): bool {
 		global $wpdb;
 		$table = self::table();
-		if ( get_site_option( 'pom_ai_tasks_schema' ) === self::SCHEMA ) { return true; }
-		if ( (int) get_site_option( 'pom_ai_tasks_install_retry', 0 ) > time() ) { return false; }
-		update_site_option( 'pom_ai_tasks_install_retry', time() + 60 );
+		if ( get_site_option( 'pom_mcp_tasks_schema' ) === self::SCHEMA ) { return true; }
+		if ( (int) get_site_option( 'pom_mcp_tasks_install_retry', 0 ) > time() ) { return false; }
+		update_site_option( 'pom_mcp_tasks_install_retry', time() + 60 );
 		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
 			id char(32) NOT NULL,
 			blog_id bigint unsigned NOT NULL,
@@ -90,15 +75,9 @@ final class Queue {
 			PRIMARY KEY (id), KEY state (state, created), KEY expires (expires), KEY storage (state, storage_bytes)
 		) {$wpdb->get_charset_collate()}";
 		if ( $wpdb->query( $sql ) === false ) { return false; }
-		// Probe a known column, never the database's table catalog. Existing receipts remain readable.
-		$suppressed = $wpdb->suppress_errors();
-		$upgraded = $wpdb->query( "SELECT storage_bytes FROM {$table} LIMIT 0" ) !== false;
-		$wpdb->suppress_errors( $suppressed );
-		if ( ! $upgraded && $wpdb->query( "ALTER TABLE {$table} ADD storage_bytes int unsigned NOT NULL DEFAULT 2097152, ADD KEY storage (state, storage_bytes)" ) === false ) { return false; }
-		if ( $wpdb->query( "UPDATE {$table} SET storage_bytes = GREATEST(OCTET_LENGTH(payload), OCTET_LENGTH(result)) WHERE state NOT IN ('queued','scheduled','running')" ) === false ) { return false; }
 		if ( $wpdb->query( "CREATE TABLE IF NOT EXISTS {$table}_queue (id tinyint unsigned NOT NULL, blog_id bigint unsigned NOT NULL, PRIMARY KEY (id)) {$wpdb->get_charset_collate()}" ) === false ) { return false; }
-		update_site_option( 'pom_ai_tasks_schema', self::SCHEMA );
-		delete_site_option( 'pom_ai_tasks_install_retry' );
+		update_site_option( 'pom_mcp_tasks_schema', self::SCHEMA );
+		delete_site_option( 'pom_mcp_tasks_install_retry' );
 		return true;
 	}
 
@@ -106,7 +85,7 @@ final class Queue {
 	private static function lock( string $scope, bool $release = false ): bool {
 		global $wpdb;
 		$table = self::table();
-		$name = 'pom-ai-task-' . substr( hash( 'sha256', DB_NAME . ':' . $wpdb->base_prefix . ':' . $scope ), 0, 48 );
+		$name = 'pom-mcp-task-' . substr( hash( 'sha256', DB_NAME . ':' . $wpdb->base_prefix . ':' . $scope ), 0, 48 );
 		$sql = $release ? 'RELEASE_LOCK(%s)' : 'GET_LOCK(%s, 0)';
 		return (string) $wpdb->get_var( $wpdb->prepare( "SELECT {$sql} /* IN_TABLE={$table} */", $name ) ) === '1';
 	}
@@ -116,23 +95,23 @@ final class Queue {
 		global $wpdb;
 		$encoded = wp_json_encode( $payload );
 		if ( ! self::$hooked || ( $request_id !== '' && ! preg_match( '/^[a-f0-9]{32}$/D', $request_id ) ) || ! isset( self::$handlers[ $kind ] ) || ! preg_match( '/^[a-f0-9]{64}$/D', $owner ) || ! is_string( $encoded ) || strlen( $encoded ) > MB_IN_BYTES ) {
-			return new WP_Error( 'pom_ai_task_invalid', 'The operation is unavailable or exceeds the 1 MiB job limit.', array( 'status' => 400 ) );
+			return new WP_Error( 'pom_mcp_task_invalid', 'The operation is unavailable or exceeds the 1 MiB job limit.', array( 'status' => 400 ) );
 		}
 		if ( ! self::lock( 'admission' ) ) { return self::busy(); }
 		try {
-			if ( ! self::install() ) { return new WP_Error( 'pom_ai_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
+			if ( ! self::install() ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 			$table = self::table();
 			if ( $request_id !== '' ) {
 				$existing = $wpdb->get_row( $wpdb->prepare( "SELECT id, blog_id, origin_blog, owner, kind, state, created, started, expires, result FROM {$table} WHERE id = %s", $request_id ), ARRAY_A );
-				if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_ai_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
+				if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 				if ( $existing ) {
 					return $existing['owner'] === $owner && $existing['kind'] === $kind && (int) $existing['origin_blog'] === get_current_blog_id() && (int) $existing['blog_id'] === ( $blog ?: get_current_blog_id() )
-						? self::status( $request_id, $owner ) : new WP_Error( 'pom_ai_task_conflict', 'This request ID is already in use.', array( 'status' => 409 ) );
+						? self::status( $request_id, $owner ) : new WP_Error( 'pom_mcp_task_conflict', 'This request ID is already in use.', array( 'status' => 409 ) );
 				}
 			}
 			// Both result and pending storage are bounded, including when cron is stopped.
 			$receipts = $wpdb->get_results( $wpdb->prepare( "SELECT state, storage_bytes FROM {$table} FORCE INDEX (storage) LIMIT %d", self::RECEIPT_CAPACITY ), ARRAY_A );
-			if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_ai_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
+			if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 			$pending = 0; $bytes = 0;
 			foreach ( $receipts as $receipt ) { $pending += in_array( $receipt['state'], array( 'queued', 'scheduled', 'running' ), true ) ? 1 : 0; $bytes += (int) $receipt['storage_bytes']; }
 			if ( $pending >= self::CAPACITY ) { return self::busy(); }
@@ -142,11 +121,11 @@ final class Queue {
 			if ( $count >= self::RECEIPT_CAPACITY || $bytes + 2 * MB_IN_BYTES > self::STORAGE_LIMIT ) {
 				// Keep ordinary admission on the covering storage index; fetch cleanup metadata only under pressure.
 				$receipts = $wpdb->get_results( $wpdb->prepare( "SELECT id, blog_id, attachment, state, storage_bytes FROM {$table} FORCE INDEX (expires) WHERE state IN ('completed','failed','uncertain','expired') ORDER BY expires, id LIMIT %d", self::RECEIPT_CAPACITY ), ARRAY_A );
-				if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_ai_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
+				if ( $wpdb->last_error !== '' ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 				foreach ( $receipts as $receipt ) {
 					if ( $count < self::RECEIPT_CAPACITY && $bytes + 2 * MB_IN_BYTES <= self::STORAGE_LIMIT ) { break; }
 					$deleted = $wpdb->delete( $table, array( 'id' => $receipt['id'], 'state' => $receipt['state'] ) );
-					if ( $deleted === false ) { return new WP_Error( 'pom_ai_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
+					if ( $deleted === false ) { return new WP_Error( 'pom_mcp_task_storage', 'Background storage is unavailable.', array( 'status' => 503 ) ); }
 					// Concurrent cleanup may already have removed this immutable terminal row.
 					--$count;
 					$bytes -= (int) $receipt['storage_bytes'];
@@ -158,10 +137,10 @@ final class Queue {
 			$blog = $blog ?: get_current_blog_id();
 			$record = array( 'id' => $id, 'blog_id' => $blog, 'origin_blog' => get_current_blog_id(), 'owner' => $owner, 'kind' => $kind,
 				'state' => 'queued', 'created' => time(), 'expires' => time() + self::RETENTION, 'payload' => $encoded, 'result' => '', 'attachment' => $payload['audio']['blob'] ?? '', 'storage_bytes' => 2 * MB_IN_BYTES );
-			if ( ! $wpdb->insert( $table, $record ) ) { return new WP_Error( 'pom_ai_task_storage', 'The operation could not be saved.', array( 'status' => 503 ) ); }
+			if ( ! $wpdb->insert( $table, $record ) ) { return new WP_Error( 'pom_mcp_task_storage', 'The operation could not be saved.', array( 'status' => 503 ) ); }
 			if ( ! self::ensure_maintenance() ) {
 				$wpdb->delete( $table, array( 'id' => $id, 'state' => 'queued' ) );
-				return new WP_Error( 'pom_ai_task_schedule', 'WordPress could not schedule this operation. No work was started.', array( 'status' => 503 ) );
+				return new WP_Error( 'pom_mcp_task_schedule', 'WordPress could not schedule this operation. No work was started.', array( 'status' => 503 ) );
 			}
 			// The queue's recovery event is durable before any destination worker is scheduled.
 			self::dispatch_locked( $blog );
@@ -172,7 +151,7 @@ final class Queue {
 	}
 
 	private static function busy(): WP_Error {
-		return new WP_Error( 'pom_ai_task_busy', 'The background queue is full or busy. Retry later; no operation was started.', array( 'status' => 429, 'retry_after' => 5 ) );
+		return new WP_Error( 'pom_mcp_task_busy', 'The background queue is full or busy. Retry later; no operation was started.', array( 'status' => 429, 'retry_after' => 5 ) );
 	}
 
 	private static function schedule( string $id, int $blog, int $at ) {
@@ -249,19 +228,19 @@ final class Queue {
 			if ( ! $row ) { $row = $wpdb->get_row( $wpdb->prepare( "SELECT id, blog_id, kind, state, expires FROM {$table} FORCE INDEX (state) WHERE state = 'queued' AND blog_id = %d ORDER BY created, id LIMIT 1", $blog ), ARRAY_A ); }
 			if ( ! $row ) { self::ensure_maintenance( false ); return; }
 			if ( (int) $row['expires'] < time() || ! self::active_site( (int) $row['blog_id'], $row['kind'] ) ) {
-				self::finish( $row['id'], 'failed', new WP_Error( 'pom_ai_task_unavailable', 'The queued operation expired or its destination is no longer active.' ), $row['state'] );
+				self::finish( $row['id'], 'failed', new WP_Error( 'pom_mcp_task_unavailable', 'The queued operation expired or its destination is no longer active.' ), $row['state'] );
 				continue;
 			}
 			if ( $row['state'] === 'queued' && $wpdb->update( $table, array( 'state' => 'scheduled' ), array( 'id' => $row['id'], 'state' => 'queued' ) ) !== 1 ) { return; }
 			$scheduled = self::schedule( $row['id'], $blog, time() );
 			if ( ! is_wp_error( $scheduled ) && $scheduled ) { self::ensure_maintenance(); return; }
-			self::finish( $row['id'], 'failed', new WP_Error( 'pom_ai_task_schedule', 'WordPress could not schedule this operation. No work was started.' ), 'scheduled' );
+			self::finish( $row['id'], 'failed', new WP_Error( 'pom_mcp_task_schedule', 'WordPress could not schedule this operation. No work was started.' ), 'scheduled' );
 		}
 		self::ensure_maintenance();
 	}
 
 	private static function dispatch( int $blog = 0 ): void {
-		if ( get_site_option( 'pom_ai_tasks_schema' ) !== self::SCHEMA || ! self::lock( 'admission' ) ) { return; }
+		if ( get_site_option( 'pom_mcp_tasks_schema' ) !== self::SCHEMA || ! self::lock( 'admission' ) ) { return; }
 		try { self::dispatch_locked( $blog ?: get_current_blog_id() ); }
 		finally { self::lock( 'admission', true ); }
 	}
@@ -308,10 +287,10 @@ final class Queue {
 	/** Lookup is exact and scoped to the original actor, credential and connection site. */
 	public static function status( string $id, string $owner ) {
 		global $wpdb;
-		if ( ! preg_match( '/^[a-f0-9]{32}$/D', $id ) || ! get_site_option( 'pom_ai_tasks_schema' ) ) { return new WP_Error( 'pom_ai_task_missing', 'Task not found.', array( 'status' => 404 ) ); }
+		if ( ! preg_match( '/^[a-f0-9]{32}$/D', $id ) || ! get_site_option( 'pom_mcp_tasks_schema' ) ) { return new WP_Error( 'pom_mcp_task_missing', 'Task not found.', array( 'status' => 404 ) ); }
 		$table = self::table();
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT id, blog_id, state, created, started, expires, result FROM {$table} WHERE id = %s AND owner = %s AND origin_blog = %d", $id, $owner, get_current_blog_id() ), ARRAY_A );
-		if ( ! $row || ( $row['state'] !== 'running' && (int) $row['expires'] < time() ) ) { return new WP_Error( 'pom_ai_task_missing', 'Task not found or its receipt expired. Inspect the site before repeating a write.', array( 'status' => 404 ) ); }
+		if ( ! $row || ( $row['state'] !== 'running' && (int) $row['expires'] < time() ) ) { return new WP_Error( 'pom_mcp_task_missing', 'Task not found or its receipt expired. Inspect the site before repeating a write.', array( 'status' => 404 ) ); }
 		// Only maintenance can confirm abandonment after acquiring the execution lock.
 		// Elapsed time alone cannot make a still-running operation terminal.
 		return self::receipt( $row );
@@ -321,19 +300,19 @@ final class Queue {
 	public static function run( string $id, int $blog ): void {
 		global $wpdb;
 		if ( self::$running || ! preg_match( '/^[a-f0-9]{32}$/D', $id ) || $blog !== get_current_blog_id() ) { return; }
-		if ( get_site_option( 'pom_ai_tasks_schema' ) !== self::SCHEMA ) { self::maintenance(); return; }
+		if ( get_site_option( 'pom_mcp_tasks_schema' ) !== self::SCHEMA ) { self::maintenance(); return; }
 		$table = self::table();
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT state FROM {$table} WHERE id = %s AND blog_id = %d", $id, $blog ), ARRAY_A );
 		if ( ! $row || $row['state'] !== 'scheduled' ) { if ( ( $row['state'] ?? '' ) === 'queued' ) { self::dispatch(); } return; }
 		if ( $blog !== self::$boot_blog ) {
-			self::finish( $id, 'failed', new WP_Error( 'pom_ai_task_bootstrap', 'The cron runner must start WordPress for the destination site. Switching database context alone cannot load its theme and plugins.' ), 'scheduled' );
+			self::finish( $id, 'failed', new WP_Error( 'pom_mcp_task_bootstrap', 'The cron runner must start WordPress for the destination site. Switching database context alone cannot load its theme and plugins.' ), 'scheduled' );
 			self::dispatch();
 			return;
 		}
 		// Spread retries so many destination sites cannot create a five-second cron stampede.
 		if ( ! self::lock( 'execution' ) ) {
 			$scheduled = self::schedule( $id, $blog, time() + random_int( 30, 60 ) );
-			if ( is_wp_error( $scheduled ) || ! $scheduled ) { self::finish( $id, 'failed', new WP_Error( 'pom_ai_task_schedule', 'WordPress could not reschedule this operation. No work was started.' ), 'scheduled' ); self::dispatch(); }
+			if ( is_wp_error( $scheduled ) || ! $scheduled ) { self::finish( $id, 'failed', new WP_Error( 'pom_mcp_task_schedule', 'WordPress could not reschedule this operation. No work was started.' ), 'scheduled' ); self::dispatch(); }
 			return;
 		}
 		$claimed = false;
@@ -341,7 +320,7 @@ final class Queue {
 			$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %s AND blog_id = %d AND state = 'scheduled'", $id, $blog ), ARRAY_A );
 			if ( ! $row ) { return; }
 			if ( (int) $row['expires'] < time() ) {
-				self::finish( $id, 'expired', new WP_Error( 'pom_ai_task_expired', 'The operation expired before it started.' ), 'scheduled' );
+				self::finish( $id, 'expired', new WP_Error( 'pom_mcp_task_expired', 'The operation expired before it started.' ), 'scheduled' );
 				return;
 			}
 			$claimed = $wpdb->query( $wpdb->prepare( "UPDATE {$table} SET state = 'running', started = %d WHERE id = %s AND state = 'scheduled'", time(), $id ) ) === 1;
@@ -350,10 +329,10 @@ final class Queue {
 			$payload = json_decode( $row['payload'], true );
 			$result = isset( self::$handlers[ $row['kind'] ] ) && is_array( $payload )
 				? call_user_func( self::$handlers[ $row['kind'] ], $payload, $row )
-				: new WP_Error( 'pom_ai_task_unavailable', 'This feature is no longer available on the destination site.' );
+				: new WP_Error( 'pom_mcp_task_unavailable', 'This feature is no longer available on the destination site.' );
 			self::finish( $id, is_wp_error( $result ) ? 'failed' : 'completed', $result );
 		} catch ( Throwable $error ) {
-			if ( $claimed ) { self::finish( $id, 'uncertain', new WP_Error( 'pom_ai_task_unconfirmed', 'The operation stopped without confirmed completion. Inspect the site before repeating a write.' ) ); }
+			if ( $claimed ) { self::finish( $id, 'uncertain', new WP_Error( 'pom_mcp_task_unconfirmed', 'The operation stopped without confirmed completion. Inspect the site before repeating a write.' ) ); }
 		} finally { self::$running = false; self::lock( 'execution', true ); self::dispatch(); }
 	}
 
@@ -363,7 +342,7 @@ final class Queue {
 		$json = wp_json_encode( $result );
 		if ( ! is_string( $json ) || strlen( $json ) > 2 * MB_IN_BYTES ) {
 			$state = 'uncertain';
-			$json = wp_json_encode( array( 'code' => 'pom_ai_task_result_size', 'message' => 'The result could not be retained. Inspect the site before repeating a write; use smaller read operations.' ) );
+			$json = wp_json_encode( array( 'code' => 'pom_mcp_task_result_size', 'message' => 'The result could not be retained. Inspect the site before repeating a write; use smaller read operations.' ) );
 		}
 		$table = self::table();
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT attachment, blog_id FROM {$table} WHERE id = %s", $id ), ARRAY_A );
@@ -386,7 +365,7 @@ final class Queue {
 
 	public static function cleanup(): void {
 		global $wpdb;
-		if ( get_site_option( 'pom_ai_tasks_schema' ) !== self::SCHEMA ) { return; }
+		if ( get_site_option( 'pom_mcp_tasks_schema' ) !== self::SCHEMA ) { return; }
 		$table = self::table();
 		// A running task is retained until its worker releases the installation lock.
 		if ( ! self::lock( 'cleanup' ) ) { return; }
@@ -394,7 +373,7 @@ final class Queue {
 			if ( ! self::$running && self::lock( 'execution' ) ) {
 				try {
 					// No worker owns the connection lock, so abandoned claims cannot resume.
-					$json = wp_json_encode( array( 'code' => 'pom_ai_task_unconfirmed', 'message' => 'The worker stopped without a confirmed result. Inspect the site before repeating a write.' ) );
+					$json = wp_json_encode( array( 'code' => 'pom_mcp_task_unconfirmed', 'message' => 'The worker stopped without a confirmed result. Inspect the site before repeating a write.' ) );
 					$wpdb->query( $wpdb->prepare( "UPDATE {$table} SET state = 'uncertain', expires = %d, payload = '', result = %s, storage_bytes = %d WHERE state = 'running' LIMIT 64", time() + self::RETENTION, $json, strlen( $json ) ) );
 				} finally { self::lock( 'execution', true ); }
 			}

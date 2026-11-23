@@ -25,7 +25,6 @@ final class Bootstrap {
 	private function __construct() {
 		$this->registry = new Registry();
 		if ( is_multisite() ) { $this->network = new Network( array( $this, 'operations' ), $this->registry ); }
-		// The legacy POM AI settings loader runs on init:1 and owns its existing transport.
 		add_action( 'init', array( $this, 'start' ), 9 );
 		// Continue expiring connection data after a site disables the transport.
 		$storage = new Storage();
@@ -38,17 +37,6 @@ final class Bootstrap {
 		}
 	}
 
-	public function legacy_owner(): bool {
-		return $this->runtime_owner() !== 'framework';
-	}
-
-	public function runtime_owner(): string {
-		if ( class_exists( 'POM_AI_Account_MCP', false ) ) { return 'account'; }
-		if ( class_exists( 'POM_AI_MCP_Bootstrap', false ) ) { return 'site'; }
-		// A shared local endpoint must not bypass an existing network's delegated-only policy.
-		$network = is_multisite() ? get_network_option( get_current_network_id(), 'pom_ai_mcp_network', array() ) : array();
-		return is_array( $network ) && ( $network['enabled'] ?? false ) === true ? 'network' : 'framework';
-	}
 
 	public function requirements(): string {
 		if ( version_compare( get_bloginfo( 'version' ), '6.9', '<' )
@@ -83,24 +71,39 @@ final class Bootstrap {
 			Operation::READ,
 			array( 'type' => 'object', 'properties' => array(), 'additionalProperties' => false ),
 			'__return_true',
-			function (): array {
-				return array(
+			function ( array $args, array $actor ): array {
+				$result = array(
 					'site' => array( 'site_id' => Settings::identity(), 'site_url' => Settings::issuer(), 'blog_id' => get_current_blog_id() ),
 					'contract_version' => self::API_VERSION,
 					'providers' => array_keys( $this->providers() ),
 					'multisite' => is_multisite(),
 				);
+				if ( AccountDestination::actor( $actor ) ) {
+					$result['account_destination_version'] = AccountDestination::VERSION;
+					$result['connection'] = array( 'auth_type' => 'oauth', 'actor_user_id' => $actor['user_id'], 'client_id' => $actor['client_id'], 'scopes' => $actor['scopes'] );
+				}
+				return $result;
 			},
 			null,
-			false,
+			true,
 			Operation::READ
 		) );
 	}
 
 	public function start(): void {
+		// Keep this controller and its late-loaded runtime classes in the same package.
+		// An unrelated plugin can prepend an older Composer loader during bootstrap.
+		spl_autoload_register( static function ( string $class ): void {
+			$prefix = __NAMESPACE__ . '\\';
+			if ( strpos( $class, $prefix ) !== 0 ) { return; }
+			$short_name = substr( $class, strlen( $prefix ) );
+			if ( ! preg_match( '/^[A-Z][A-Za-z0-9_]*$/D', $short_name ) ) { return; }
+			$file = __DIR__ . '/' . $short_name . '.php';
+			if ( is_file( $file ) ) { require_once $file; }
+		}, true, true );
 		if ( $this->network ) { $this->network->hooks(); }
 		if ( wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) { Queue::hooks(); }
-		if ( ! Settings::get()['enabled'] || $this->legacy_owner() ) {
+		if ( ! Settings::get()['enabled'] ) {
 			return;
 		}
 		$this->problem = $this->requirements();
@@ -130,11 +133,11 @@ final class Bootstrap {
 		$reviews = null;
 		$network_scopes = $this->network ? $this->network->scopes() : array();
 		if ( $network_scopes ) { $read += $this->network->tools(); }
-		if ( ( $write || in_array( Network::WRITE, $network_scopes, true ) ) && Settings::writes_enabled() && Queue::available() ) {
+		if ( ( ! AccountGateway::registered() && ( $write || in_array( Network::WRITE, $network_scopes, true ) ) ) && Settings::writes_enabled() ) {
 			$reviews = new Reviews( $tokens, $write, $this->network );
 			$reviews->hooks();
 			$read += $reviews->tools();
-		} elseif ( $network_scopes ) {
+		} elseif ( $network_scopes || AccountGateway::registered() ) {
 			$read += array( 'pom_get_task' => Reviews::task_tool() );
 		}
 		( new Server( $read, $tokens, $logger, $reviews, array( $this->registry, 'items' ) ) )->hooks();
