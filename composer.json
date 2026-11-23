@@ -17,7 +17,8 @@
     "ext-fileinfo": "*"
   },
   "suggest": {
-    "ext-zend-opcache": "Optionally accelerates generated PHP settings files between requests."
+    "ext-zend-opcache": "Optionally accelerates generated PHP settings files between requests.",
+    "wordpress/mcp-adapter": "Enables the opt-in POM MCP HTTP server (0.6.1 series)."
   },
   "autoload": {
     "psr-4": {

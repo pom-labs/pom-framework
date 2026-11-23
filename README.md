@@ -49,6 +49,7 @@ Key advantages at a glance:
   - [Handling callbacks after saving](#handling-callbacks-after-saving)
   - [Loading tweak definitions](#loading-tweak-definitions)
   - [Retrieving saved values](#retrieving-saved-values)
+- [POM MCP](#pom-mcp)
 - [Product licensing client](#product-licensing-client)
   - [License_Registry](#license_registry)
   - [License_Client](#license_client)
@@ -733,6 +734,72 @@ $webhook = POM_Framework_Settings::get_setting_value('your-plugin', 'general', '
 ```
 
 By mirroring the input type you ensure the runtime value has been filtered by the same logic that protects the form submission, guarding against manual edits or tampering in `wp-content/settings/`.
+
+## POM MCP
+
+Products can register with POM MCP to share one site-level server and one **Settings → POM MCP** page. The server is disabled on a new site. A site administrator enables it, selects the authentication methods, and copies the connection URL from that page. WordPress 6.9 or later, a compatible WordPress MCP Adapter 0.6.1 series package, and HTTPS are required. HTTP loopback is supported for local development.
+
+OAuth requires pretty permalinks and a WordPress account with access to the site. The client uses OAuth discovery and authorization code with PKCE and requests `mcp:read`. For a header-based connection, enable **Allow API key**, save the ID of an existing service user, then select **Generate or rotate API key**. Copy the key while it is displayed and send it in the `X-POM-AI-MCP-API-Key` header. The endpoint shown in Settings also supports header-based access on sites with plain permalinks.
+
+If a site's home URL contains a path, map the standard authorization metadata URL `/.well-known/oauth-authorization-server/site-path` to `/site-path/.well-known/oauth-authorization-server` at the web server. Request the standard URL and verify that the JSON `issuer` matches the site's home URL. Header-based access works with the endpoint shown in Settings.
+
+**Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** records connection outcomes and operation names. Settings, credentials and activity belong to the current site in a multisite network. A recognized POM AI MCP or existing network policy keeps control of its connection settings.
+
+### Register a product
+
+Include `wordpress/mcp-adapter` in the participating product's Composer dependencies. The product can use its standard Composer autoloader. Register the provider from the product bootstrap after loading that autoloader and before WordPress `init`.
+
+```php
+use POMFramework\Mcp\Bootstrap;
+
+if ( class_exists( Bootstrap::class ) && Bootstrap::API_VERSION === 1 ) {
+    Bootstrap::register_provider( 'pom-example', 'POM Example' );
+}
+```
+
+The optional third argument is a callable that returns an iterable of `POMFramework\Mcp\Operation` objects. The framework calls it once per request for an enabled server. Each operation takes a unique `pom_*`, `wp_*` or `wc_*` tool name, a label, a description, an effect, a closed JSON Schema object, a permission callback and an execution callback. Both callbacks receive the validated input. Return `true` from the permission callback when the actor can use the operation and a `WP_Error` to deny it with a reason. The execution callback can return a JSON-compatible result or a `WP_Error`.
+
+Use `Operation::READ` for operations with no writes or chargeable effects. Use the product's object-level WordPress permissions in the permission callback. The server exposes its own registered abilities over MCP and binds them to an authenticated request on the same site.
+
+A product may register a reviewed change with `Operation::WRITE` and supply a separate preview callback as the eighth constructor argument. The preview must have no effects and return an array with `dry_run` set to `true`, exact changes, and a revision when the operation depends on existing state. When the preview returns `revision`, the caller must include `expected_revision` in the operation arguments. The provider checks that revision in both preview and execution. Use closed schemas and domain-specific callbacks for individual operations. WordPress permissions must cover the target and each effect. The catalogue supports reviewed writes without exposing their execution callbacks as direct tools.
+
+Use `Operation::COST` for paid product operations with an authoritative execution limit. The preview must return a revision and a finite nonnegative `estimated_credits` number. The approved arguments must include a numeric `max_credits` at least as high as the estimate. Use the product service to enforce that same ceiling before committing a charge or contacting a provider. Chargeable operations always require a signed-in WordPress review and are available only on site connections.
+
+The optional fourth argument to `register_provider()` returns `POMFramework\Mcp\Catalog_Item` descriptors for resources and prompts. Register each resource with its stable `pom://` URI and MIME type. Prompt descriptors declare their string arguments. Give each item a WordPress permission callback because its content can depend on the connected account. Providers that need the grant context can opt in with the `Operation` constructor's ninth argument. Preview and execution callbacks then receive the validated arguments followed by the actor. The tenth argument delegates a read or assigns a write to an established network group. Resources and prompts also require explicit delegation. New descriptors default to site-local.
+
+The built-in `pom_get_site_context` tool returns the site identity, registered product identifiers, multisite status and contract version. Use it to verify the connection and its destination.
+
+### Review a change
+
+On a site with a product that supplies reviewed writes, enable **Allow reviewed changes through OAuth** in **Settings → POM MCP**. Connect using OAuth with `mcp:read` and `mcp:write`. API keys continue to have read access.
+
+1. Call `pom_preview_operation` when you need the current revision. Call `pom_prepare_review` with the exact operation and its arguments. Inspect the review and choose **Approve change** or **Reject change** in WordPress, or use the confirmation form in a compatible MCP client. Set `review_mode` to `web` to require the WordPress form. `pom_get_review` returns the status and receipt.
+2. Call `pom_apply_review` with the approved `review_id`. It returns a task receipt. The background worker checks the original connection, current permissions and the exact preview before applying the operation.
+3. Poll `pom_get_task` using the returned ID. The receipt belongs to the same connection and site. Inspect the destination before repeating an uncertain operation.
+
+Approval leaves the site unchanged until its task runs. The site's normal WordPress cron must run for the worker to apply a queued operation. Turning off reviewed changes prevents new application requests and prevents queued changes from running while the setting is off. The existing POM AI connection keeps its approval links and pending tasks during updates.
+
+### Product-owned editorial and settings operations
+
+When an active product supplies editorial operations for a post type, generic authoring delegates that type's editorial changes to the product. POM Events and POM LMS describe their own object permissions, drafts and associations. Their providers check revisions at execution and commit related post and metadata updates together on transactional WordPress tables.
+
+Site Tweaks can use the shared settings writer for reviewed patch operations. A patch changes either the activation flag or selected scalar fields in one module. Patches and the site Tweaks form share the same writer lock. The writer replaces the affected settings file and preserves the module's other values.
+
+### Delegate to selected WordPress Multisite destinations
+
+Open **Network Admin → Settings → POM MCP** from the main site. Enable network delegation and list the allowed destination site IDs. Network jobs require a current POM AI Unlimited entitlement and an authorized domain on the main site. Each destination needs an active POM product that provides the requested operation. Worker eligibility can be extended through `pom_mcp_network_worker_available`; check that the supplied destination will bootstrap the relevant product and shared worker. The destination's own POM MCP connection can stay disabled. An existing POM AI network keeps its existing controls.
+
+1. On the main site, enable **POM MCP** with OAuth. A network administrator consents to `mcp:read` and `network:sites:read`.
+2. Call `pom_network_list_sites`, follow `next_after_blog_id` when present, choose the intended site, then discover its tools, resources or prompts with `pom_network_discover_site`. Read an item with `pom_network_read_site`.
+3. For changes, also enable **Allow reviewed destination changes** in Network Admin and **Allow reviewed changes through OAuth** on the main site. Select the allowed write groups in Network Admin. Obtain consent for `mcp:write` and `network:sites:write`.
+4. Use `pom_network_execute_site` to prepare a change at the destination. Set `preview_only` to obtain its current revision without creating an approval. Poll the task on the main site. The review link identifies the destination and requires a signed-in decision on the main site. After approval, call `pom_apply_review` and poll the application task there as well.
+
+The destination's normal WordPress cron runs the job with the original actor's current permissions. Changes to the destination, policy or connection can invalidate queued work. A network integration may add a check through `pom_mcp_network_entitlement`, which receives the current decision, destination blog ID and whether the job concerns a write. Preserve an earlier denial and return `true` only to allow the job. The filter runs in the network main site's storage context. Pomatio retains its independent account connections.
+
+### Run product background jobs
+
+`POMFramework\Jobs\Queue` provides a shared installation-wide worker. Register a named kind with `Queue::register( $kind, $handler, $site_eligible )` from the loading product. The handler receives the saved arguments and job record on the destination site. The optional eligibility callback receives a blog ID and should verify that the destination can load the product. Use `Queue::hooks()` once the consumer loads and before handling its cron events. `Queue::enqueue()` accepts a kind, JSON-compatible arguments, a stable 64-character hex owner fingerprint, an optional destination blog, and an optional 32-character hex request ID for retries. Generate owner fingerprints from the authenticated connection and original site. `Queue::status()` returns receipts only for that owner on the submitting site. The worker shares legacy task identifiers and scheduled events so a pending POM AI operation remains readable after updating Framework.
+
 
 ## Product licensing client
 

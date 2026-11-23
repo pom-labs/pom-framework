@@ -388,6 +388,31 @@ HTACCESS;
         return $written;
     }
 
+    /** Replace a complete settings file without exposing partial PHP to readers. */
+    public static function replace_file(string $path, string $content): bool {
+        $temp = tempnam(dirname($path), '.pom-settings-');
+        if ($temp === false) {
+            return false;
+        }
+
+        try {
+            if (file_put_contents($temp, $content, LOCK_EX) !== strlen($content)) {
+                return false;
+            }
+            self::apply_file_permissions($temp);
+            if (!rename($temp, $path)) {
+                return false;
+            }
+
+            self::invalidate_file_caches($path);
+            return true;
+        } finally {
+            if (is_file($temp)) {
+                unlink($temp);
+            }
+        }
+    }
+
     /**
      * Invalidate every cache variant for a path after a successful mutation.
      *
@@ -684,9 +709,12 @@ HTACCESS;
     /**
      * Read the content of a file.
      */
-    public static function read_file($filename, $settings_dir = 'pom-framework', $return = 'default') {
+    public static function read_file($filename, $settings_dir = 'pom-framework', $return = 'default', bool $refresh = false) {
         $settings_path = self::get_settings_path($settings_dir);
         $path = $settings_path . $filename;
+        if ($refresh) {
+            self::invalidate_file_caches($path);
+        }
         $mode = $return === 'array' ? 'array' : 'default';
         $normalized_path = self::normalize_cache_path($path);
         $cache_key = self::file_read_cache_key($normalized_path, $mode);

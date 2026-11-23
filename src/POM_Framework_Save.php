@@ -24,6 +24,20 @@ class POM_Framework_Save {
             return;
         }
 
+        // Site tweaks also accept narrow reviewed updates that share this writer.
+        if ($page_slug === 'pom-tweaks' && class_exists(Settings_Patch::class)) {
+            Settings_Patch::with_lock($page_slug, static function () use ($page_slug, $settings_file_path): void {
+                POM_Framework_Disk::read_file('enabled_settings.php', $page_slug, 'array', true);
+                POM_Framework_Disk::read_file('fields_save_as.php', $page_slug, 'array', true);
+                self::save_form($page_slug, $settings_file_path);
+            });
+            return;
+        }
+
+        self::save_form($page_slug, $settings_file_path);
+    }
+
+    private static function save_form($page_slug, $settings_file_path): void {
         POM_Framework_Disk::create_settings_dir($page_slug);
 
         $settings_path = (new POM_Framework_Disk())->get_settings_path($page_slug);
