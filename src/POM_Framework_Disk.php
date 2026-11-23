@@ -396,7 +396,7 @@ HTACCESS;
         }
 
         try {
-            if (file_put_contents($temp, $content, LOCK_EX) !== strlen($content)) {
+            if (realpath(dirname($temp)) !== realpath(dirname($path)) || file_put_contents($temp, $content, LOCK_EX) !== strlen($content)) {
                 return false;
             }
             self::apply_file_permissions($temp);

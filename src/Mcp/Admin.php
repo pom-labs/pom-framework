@@ -134,10 +134,17 @@ final class Admin {
 			wp_die( esc_html__( 'You cannot manage POM MCP on this site.', 'pom-framework' ), '', array( 'response' => 403 ) );
 		}
 		$settings = Settings::get();
-		$legacy = $this->bootstrap->legacy_owner();
+		$owner = $this->bootstrap->runtime_owner();
+		$legacy = $owner !== 'framework';
 		$requirements = $legacy ? '' : $this->bootstrap->requirements();
 		$problem = $this->bootstrap->problem() ?: $requirements;
 		$storage = new Storage();
+		$runtime = array(
+			'account' => __( 'Existing POM account gateway', 'pom-framework' ),
+			'site' => __( 'Existing POM AI site server', 'pom-framework' ),
+			'network' => __( 'Existing network delegation policy', 'pom-framework' ),
+			'framework' => __( 'POM Framework', 'pom-framework' ),
+		);
 		?>
 		<div class="wrap">
 			<h1>POM MCP</h1>
@@ -145,11 +152,12 @@ final class Admin {
 				<div class="notice notice-success"><p><?php esc_html_e( 'POM MCP settings updated.', 'pom-framework' ); ?></p></div>
 			<?php endif; ?>
 			<?php if ( $legacy ) : ?>
-				<div class="notice notice-info"><p><?php esc_html_e( 'The existing POM AI MCP or network policy controls connections on this site.', 'pom-framework' ); ?></p></div>
+				<div class="notice notice-info"><p><?php esc_html_e( 'Existing settings control connections on this site.', 'pom-framework' ); ?></p></div>
 			<?php elseif ( $problem !== '' ) : ?>
 				<div class="notice notice-warning"><p><?php echo esc_html( $problem ); ?></p></div>
 			<?php endif; ?>
 			<h2><?php esc_html_e( 'Connection', 'pom-framework' ); ?></h2>
+			<p><?php echo esc_html( sprintf( __( 'Connection controller: %s', 'pom-framework' ), $runtime[$owner] ) ); ?></p>
 			<p><code><?php echo esc_html( Settings::endpoint() ); ?></code></p>
 			<?php if ( $legacy ) : ?>
 				<p><?php esc_html_e( 'Manage existing connection settings from the POM AI or Network Admin screen.', 'pom-framework' ); ?></p>

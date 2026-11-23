@@ -783,7 +783,7 @@ Approval leaves the site unchanged until its task runs. The site's normal WordPr
 
 When an active product supplies editorial operations for a post type, generic authoring delegates that type's editorial changes to the product. POM Events and POM LMS describe their own object permissions, drafts and associations. Their providers check revisions at execution and commit related post and metadata updates together on transactional WordPress tables.
 
-Site Tweaks can use the shared settings writer for reviewed patch operations. A patch changes either the activation flag or selected scalar fields in one module. Patches and the site Tweaks form share the same writer lock. The writer replaces the affected settings file and preserves the module's other values.
+Site Tweaks can use the shared settings writer for reviewed patch operations. A patch changes either the activation flag or selected scalar fields in one module. Patches and the site Tweaks form share the same writer lock. After validating the module and its expected revision, products call `Settings_Patch::save_locked()` within `Settings_Patch::with_lock()`. Pass either the activation flag or a map of approved default-storage fields. The writer replaces the affected settings file and preserves the module's other values.
 
 ### Delegate to selected WordPress Multisite destinations
 

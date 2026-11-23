@@ -42,8 +42,7 @@ final class Ownership {
 		}
 		$type = $post_id ? get_post_type( (int) $post_id ) : '';
 		if ( isset( $types[ $type ] ) ) { return self::denied( $types[ $type ] ); }
-		$taxonomy = $args['taxonomy'] ?? '';
-		return $write && $events && in_array( $taxonomy, array( 'event_type', 'event_category' ), true ) ? self::denied( 'POM Events' ) : true;
+		return true;
 	}
 
 	private static function denied( string $owner ): WP_Error {

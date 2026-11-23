@@ -39,12 +39,15 @@ final class Bootstrap {
 	}
 
 	public function legacy_owner(): bool {
-		if ( class_exists( 'POM_AI_MCP_Bootstrap', false ) || class_exists( 'POM_AI_Account_MCP', false ) ) {
-			return true;
-		}
+		return $this->runtime_owner() !== 'framework';
+	}
+
+	public function runtime_owner(): string {
+		if ( class_exists( 'POM_AI_Account_MCP', false ) ) { return 'account'; }
+		if ( class_exists( 'POM_AI_MCP_Bootstrap', false ) ) { return 'site'; }
 		// A shared local endpoint must not bypass an existing network's delegated-only policy.
 		$network = is_multisite() ? get_network_option( get_current_network_id(), 'pom_ai_mcp_network', array() ) : array();
-		return is_array( $network ) && ( $network['enabled'] ?? false ) === true;
+		return is_array( $network ) && ( $network['enabled'] ?? false ) === true ? 'network' : 'framework';
 	}
 
 	public function requirements(): string {

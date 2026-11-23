@@ -6,6 +6,7 @@
 namespace POMFramework;
 
 class POM_Framework_Save {
+    public const SITE_PATCH_LOCK_VERSION = 1;
 
     public static function save_settings($page_slug, $settings_file_path): void {
         if (!isset($_POST['save_pom_framework_fields'])) {
