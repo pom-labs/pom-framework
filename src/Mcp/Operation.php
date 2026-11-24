@@ -16,6 +16,8 @@ final class Operation {
 	public array $schema;
 	public bool $uses_actor;
 	public string $network_group;
+	/** @var string[] Site permission groups. The registry supplies the provider ID by default. */
+	public array $write_groups;
 	/** @var callable */
 	public $permission;
 	/** @var callable */
@@ -23,7 +25,7 @@ final class Operation {
 	/** @var callable|null */
 	public $preview;
 
-	public function __construct( string $name, string $label, string $description, string $effect, array $schema, callable $permission, callable $execute, ?callable $preview = null, bool $uses_actor = false, string $network_group = '' ) {
+	public function __construct( string $name, string $label, string $description, string $effect, array $schema, callable $permission, callable $execute, ?callable $preview = null, bool $uses_actor = false, string $network_group = '', array $write_groups = array() ) {
 		if ( ! preg_match( '/^(?:pom|wp|wc)_[a-z0-9]+(?:_[a-z0-9]+)*$/D', $name ) || strlen( $name ) > 100
 			|| trim( $label ) === '' || trim( $description ) === ''
 			|| ! in_array( $effect, array( self::READ, self::WRITE, self::COST ), true )
@@ -40,5 +42,10 @@ final class Operation {
 		$this->preview = $preview;
 		$this->uses_actor = $uses_actor;
 		$this->network_group = $network_group;
+		$this->write_groups = $write_groups;
+	}
+
+	public function allows_site_writes(): bool {
+		return Settings::write_groups_allowed( $this->write_groups );
 	}
 }

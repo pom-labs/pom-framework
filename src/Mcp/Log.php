@@ -11,6 +11,7 @@ final class Log {
 	}
 
 	public function record( string $action, string $status, array $actor = array() ): void {
+		if ( ! $this->storage->ready() ) { return; }
 		global $wpdb;
 		$wpdb->insert( $this->storage->logs_table(), array(
 			'timestamp'     => gmdate( 'Y-m-d H:i:s' ),
@@ -21,11 +22,11 @@ final class Log {
 		), array( '%s', '%d', '%s', '%s', '%s' ) );
 	}
 
-	public function recent(): array {
+	public function recent( int $before = 0 ): array {
 		global $wpdb;
-		return $wpdb->get_results(
-			"SELECT timestamp, actor_user_id, auth_type, action, status FROM {$this->storage->logs_table()} ORDER BY id DESC LIMIT 20",
-			ARRAY_A
-		) ?: array();
+		$cutoff = gmdate( 'Y-m-d H:i:s', time() - 30 * DAY_IN_SECONDS );
+		$query = $wpdb->prepare( "SELECT id, timestamp, actor_user_id, auth_type, action, status FROM {$this->storage->logs_table()} WHERE timestamp >= %s", $cutoff );
+		if ( $before > 0 ) { $query .= $wpdb->prepare( ' AND id < %d', $before ); }
+		return $wpdb->get_results( $query . ' ORDER BY id DESC LIMIT 31', ARRAY_A ) ?: array();
 	}
 }

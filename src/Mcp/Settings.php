@@ -20,6 +20,8 @@ final class Settings {
 			'enabled' => false,
 			'oauth' => true,
 			'writes' => false,
+			'write_permissions' => array(),
+			'network_destination' => true,
 			'account_destination' => false,
 			'api_key' => false,
 			'service_user' => 0,
@@ -69,6 +71,20 @@ final class Settings {
 
 	public static function writes_enabled(): bool {
 		return (bool) self::get()['writes'] && self::oauth_available();
+	}
+
+	/** Existing reviewed-write configurations keep their scope until a group is disabled. */
+	public static function write_groups_allowed( array $groups ): bool {
+		$permissions = (array) self::get()['write_permissions'];
+		foreach ( $groups as $group ) {
+			if ( array_key_exists( $group, $permissions ) && $permissions[ $group ] !== true ) { return false; }
+		}
+		return true;
+	}
+
+	public static function accepts_network_delegation( int $blog ): bool {
+		$settings = get_blog_option( $blog, self::OPTION, array() );
+		return ( $settings['network_destination'] ?? true ) === true;
 	}
 
 	public static function actor_can_connect( int $user ): bool {

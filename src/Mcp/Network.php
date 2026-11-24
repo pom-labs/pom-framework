@@ -79,6 +79,7 @@ final class Network {
 		if ( ! $site || (int) $site->network_id !== get_current_network_id() || $site->archived || $site->deleted || $site->spam ) {
 			return false;
 		}
+		if ( ! Settings::accepts_network_delegation( $blog ) ) { return false; }
 		// A scheduled job needs at least one provider bootstrap on the actual destination.
 		// Activation can change while an item waits. Check it again at the worker.
 		$network_plugins = (array) get_network_option( get_current_network_id(), 'active_sitewide_plugins', array() );
@@ -203,7 +204,7 @@ final class Network {
 			return $entitled === true ? $actor : ( is_wp_error( $entitled ) ? $entitled : self::denied() );
 		} );
 		if ( is_wp_error( $actor ) ) {
-			$this->log_result( $origin, $blog, $action, $actor );
+			$this->log_result( $origin, $blog, $action, $actor, array() );
 			return $actor;
 		}
 		wp_set_current_user( $actor['user_id'] );
@@ -227,8 +228,10 @@ final class Network {
 	}
 
 	private function log_result( int $origin, int $destination, string $action, $result, array $actor = array() ): void {
-		$this->at_origin( $origin, static function () use ( $destination, $action, $result, $actor ): void {
-			( new Log( new Storage() ) )->record( 'network_' . $action . '_site_' . $destination, is_wp_error( $result ) ? 'denied' : 'success', $actor );
+		$status = is_wp_error( $result ) ? 'denied' : 'success';
+		( new Log( new Storage() ) )->record( 'network_' . $action, $status, $actor );
+		$this->at_origin( $origin, static function () use ( $destination, $action, $status, $actor ): void {
+			( new Log( new Storage() ) )->record( 'network_' . $action . '_site_' . $destination, $status, $actor );
 		} );
 	}
 
@@ -279,7 +282,7 @@ final class Network {
 			if ( $operation->effect === Operation::COST ) { continue; }
 			if ( $operation->effect === Operation::READ && $operation->network_group !== Operation::READ ) { continue; }
 			if ( $operation->effect === Operation::WRITE && ( ! in_array( self::WRITE, $actor['scopes'], true )
-				|| ! self::write_allowed( $operation->network_group, $name, array(), true ) ) ) { continue; }
+				|| ! $operation->allows_site_writes() || ! self::operation_write_allowed( $operation, array(), true ) ) ) { continue; }
 			$tools[] = array( 'name' => $name, 'description' => $operation->description, 'inputSchema' => $operation->schema, 'write' => $operation->effect === Operation::WRITE, 'network_group' => $operation->network_group );
 		}
 		return array( 'tools' => $tools, 'site_id' => Settings::identity() );
@@ -306,7 +309,7 @@ final class Network {
 		}
 		$operation = $catalog[ $name ] ?? null;
 		if ( $payload['action'] === 'read' ) { return $operation && $operation->effect === Operation::READ && $operation->network_group === Operation::READ ? self::invoke( $operation, $args, $actor, false ) : self::denied(); }
-		if ( $payload['action'] !== 'prepare' || ! $operation || $operation->effect !== Operation::WRITE || ! self::write_allowed( $operation->network_group, $operation->name, $args ) ) { return self::denied(); }
+		if ( $payload['action'] !== 'prepare' || ! $operation || $operation->effect !== Operation::WRITE || ! self::operation_write_allowed( $operation, $args ) ) { return self::denied(); }
 		$preview_only = ( $input['preview_only'] ?? false ) === true;
 		$preview = Reviews::preview_operation( $operation, $args, $actor, ! $preview_only );
 		if ( is_wp_error( $preview ) || $preview_only ) { return $preview; }
@@ -326,7 +329,7 @@ final class Network {
 			|| $record['network']['blog'] !== get_current_blog_id() || $record['network']['generation'] !== $payload['generation'] ) { return self::denied(); }
 		$entry = $record['entries'][0];
 		$operation = $catalog[ $entry['tool'] ] ?? null;
-		if ( ! $operation || $operation->effect !== Operation::WRITE || ! self::write_allowed( $operation->network_group, $operation->name, $entry['arguments'] ) ) { return self::denied(); }
+		if ( ! $operation || $operation->effect !== Operation::WRITE || ! self::operation_write_allowed( $operation, $entry['arguments'] ) ) { return self::denied(); }
 		$preview = Reviews::preview_operation( $operation, $entry['arguments'], $actor );
 		if ( is_wp_error( $preview ) ) { return $preview; }
 		$target = get_current_blog_id();
@@ -343,11 +346,20 @@ final class Network {
 	}
 
 	private static function invoke( Operation $operation, array $args, array $actor, bool $write ) {
+		if ( $write && ( ! Settings::accepts_network_delegation( get_current_blog_id() ) || ! $operation->allows_site_writes() || ! self::operation_write_allowed( $operation, $args ) ) ) { return self::denied(); }
 		$valid = rest_validate_value_from_schema( $args, $operation->schema, 'arguments' );
 		if ( is_wp_error( $valid ) ) { return $valid; }
 		$permission = ( $operation->permission )( $args );
 		if ( $permission !== true || $write !== ( $operation->effect === Operation::WRITE ) ) { return is_wp_error( $permission ) ? $permission : self::denied(); }
 		return $operation->uses_actor ? ( $operation->execute )( $args, $actor ) : ( $operation->execute )( $args );
+	}
+
+	private static function operation_write_allowed( Operation $operation, array $args, bool $discovery = false ): bool {
+		if ( ! self::write_allowed( $operation->network_group, $operation->name, $args, $discovery ) ) { return false; }
+		foreach ( array_intersect( $operation->write_groups, array_keys( self::GROUPS ) ) as $group ) {
+			if ( $group !== $operation->network_group && ! self::write_allowed( $group, $operation->name, $args, $discovery ) ) { return false; }
+		}
+		return true;
 	}
 
 	/** Switching is solely for storage. Destination handlers always run on the originally bootstrapped site. */
@@ -373,7 +385,7 @@ final class Network {
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'POM MCP Network', 'pom-framework' ); ?></h1>
-			<p><?php esc_html_e( 'Connect to the main site with OAuth. List each destination explicitly. Its active products determine which operations are available.', 'pom-framework' ); ?></p>
+			<p><?php esc_html_e( 'Connect to the main site with OAuth and list each destination explicitly. Each destination can disable delegation and restrict its own write permissions in Settings → POM MCP.', 'pom-framework' ); ?></p>
 			<form method="post" action="<?php echo esc_url( get_admin_url( self::main(), 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="<?php echo esc_attr( self::ACTION ); ?>">
 				<?php wp_nonce_field( self::ACTION ); ?>

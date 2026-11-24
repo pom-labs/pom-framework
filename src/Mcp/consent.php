@@ -52,8 +52,9 @@ $oauth_fields = array( 'response_type', 'client_id', 'redirect_uri', 'scope', 's
 		<?php if ( in_array( \POMFramework\Mcp\Network::READ, $data['scopes'], true ) ) : ?>
 			<p><?php esc_html_e( 'This connection can also read the destinations enabled in POM MCP Network Settings. Any granted network writes are limited to enabled groups and require a separate decision on this main site.', 'pom-framework' ); ?></p>
 		<?php endif; ?>
-		<?php if ( \POMFramework\Mcp\AccountGateway::registered() ) : ?>
-			<p><?php esc_html_e( 'This agent can use websites connected separately in My Account, including websites you connect later. Access to each site is limited by the site’s own authorization.', 'pom-framework' ); ?></p>
+		<?php $gateway_consent = \POMFramework\Mcp\AccountGateway::consent(); ?>
+		<?php if ( $gateway_consent !== '' ) : ?>
+			<p><?php echo esc_html( $gateway_consent ); ?></p>
 		<?php endif; ?>
 		<?php if ( in_array( \POMFramework\Mcp\AccountDestination::SCOPE, $data['scopes'], true ) ) : ?>
 			<p><?php esc_html_e( 'This account connection uses the site’s authoring catalogue. Approve each requested change from a signed-in WordPress session on this site.', 'pom-framework' ); ?></p>

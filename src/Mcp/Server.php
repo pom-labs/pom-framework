@@ -66,7 +66,8 @@ final class Server {
 	public function register_abilities(): void {
 		foreach ( $this->operations as $operation ) {
 			$id = 'pom-mcp/' . str_replace( '_', '-', $operation->name );
-			$reviewed_change = in_array( $operation->name, array( 'pom_prepare_review', 'pom_apply_review', 'pom_network_execute_site', 'pom_account_execute_site' ), true );
+			$gateway_execution = AccountGateway::requires_execution_scope( $operation->name );
+			$reviewed_change = $gateway_execution || in_array( $operation->name, array( 'pom_prepare_review', 'pom_apply_review', 'pom_network_execute_site' ), true );
 			$ability = wp_register_ability( $id, array(
 				'label' => $operation->label,
 				'description' => $operation->description,
@@ -87,7 +88,7 @@ final class Server {
 				'meta' => array(
 					'public' => false,
 					'show_in_rest' => false,
-					'annotations' => array( 'readonly' => ! $reviewed_change, 'destructive' => in_array( $operation->name, array( 'pom_apply_review', 'pom_account_execute_site' ), true ), 'idempotent' => ! $reviewed_change ),
+					'annotations' => array( 'readonly' => ! $reviewed_change, 'destructive' => $gateway_execution || $operation->name === 'pom_apply_review', 'idempotent' => ! $reviewed_change ),
 				),
 			) );
 			if ( $ability ) {
@@ -153,7 +154,7 @@ final class Server {
 		try {
 			// Construct only the HTTP server. The adapter singleton would also bootstrap its generic executor.
 			$transport = new McpServer(
-				'pom-mcp', Settings::REST_NAMESPACE, 'mcp', AccountGateway::registered() ? 'Pomatio Account MCP' : 'POM MCP',
+				'pom-mcp', Settings::REST_NAMESPACE, 'mcp', AccountGateway::registered() ? AccountGateway::label() . ' MCP' : 'POM MCP',
 				'Operations provided by the POM products active on this WordPress site.', self::VERSION,
 				array( HttpTransport::class ), null, null, array_keys( $this->registered ),
 				$this->components[ Catalog_Item::RESOURCE ] ?? array(), $this->components[ Catalog_Item::PROMPT ] ?? array(),
@@ -298,7 +299,8 @@ final class Server {
 		if ( ! $this->is_actor_current() || $operation->effect !== Operation::READ ) {
 			return new WP_Error( 'pom_mcp_forbidden', 'An authenticated POM MCP read request is required.', array( 'status' => 403 ) );
 		}
-		if ( AccountDestination::actor( $this->actor ) && ! AccountDestination::allows_tool( $operation, $this->actor ) ) {
+		if ( ! AccountGateway::allows_tool( $operation->name, $this->actor['scopes'] ?? array() )
+			|| ( AccountDestination::actor( $this->actor ) && ! AccountDestination::allows_tool( $operation, $this->actor ) ) ) {
 			return new WP_Error( 'pom_mcp_account_scope', 'This operation is unavailable to account connections.', array( 'status' => 403 ) );
 		}
 		if ( $operation->name !== 'pom_get_task' && in_array( $operation->name, Reviews::TOOL_NAMES, true ) && ( ! $this->reviews || ! $this->reviews->authorizes( $this->actor ) ) ) {
@@ -328,7 +330,7 @@ final class Server {
 		$method = is_string( $payload['method'] ?? null ) ? $payload['method'] : '';
 		if ( $response instanceof WP_REST_Response && AccountGateway::registered() && $method === 'tools/list'
 			&& ! in_array( AccountGateway::EXECUTE, $actor['scopes'] ?? array(), true ) && isset( $result['tools'] ) ) {
-			$result['tools'] = array_values( array_filter( $result['tools'], static fn( $item ) => ( (array) $item )['name'] !== 'pom_account_execute_site' ) );
+			$result['tools'] = array_values( array_filter( $result['tools'], static fn( $item ) => ! AccountGateway::requires_execution_scope( ( (array) $item )['name'] ) ) );
 			$data['result'] = $result;
 			$response->set_data( $data );
 		}

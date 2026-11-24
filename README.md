@@ -737,7 +737,7 @@ By mirroring the input type you ensure the runtime value has been filtered by th
 
 ## POM MCP
 
-The **Connection** section shows the shared server URL. With pretty permalinks its transport is `/wp-json/pom-mcp/v1/mcp` and its OAuth routes are under `/pom-mcp/oauth/`. Create each connection from this screen or from Pomatio My Account using the new URL and a fresh authorization.
+The **Connection** section shows the shared server URL. With pretty permalinks its transport is `/wp-json/pom-mcp/v1/mcp` and its OAuth routes are under `/pom-mcp/oauth/`. Use the URL shown for the site or account you want to connect.
 
 Products can register with POM MCP to share one site-level server and one **Settings → POM MCP** page. The server is disabled on a new site. A site administrator enables it, selects the authentication methods, and copies the connection URL from that page. WordPress 6.9 or later, a compatible WordPress MCP Adapter 0.6.1 series package, and HTTPS are required. HTTP loopback is supported for local development.
 
@@ -745,7 +745,7 @@ OAuth requires pretty permalinks and a WordPress account with access to the site
 
 If a site's home URL contains a path, map the standard authorization metadata URL `/.well-known/oauth-authorization-server/site-path` to `/site-path/.well-known/oauth-authorization-server` at the web server. Request the standard URL and verify that the JSON `issuer` matches the site's home URL. Header-based access works with the endpoint shown in Settings.
 
-**Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** records connection outcomes and operation names. Settings, credentials and activity belong to the current site in a multisite network.
+**Your OAuth connections** lists the current administrator's connections and provides individual revocation. **Revoke API key** invalidates the site's current key. **Recent activity** shows actions, authentication, user IDs and outcomes, including decisions and execution of reviewed changes. Use **Older activity** for previous entries within the 30-day retention period. The log excludes credentials and request or response bodies. Delegated network jobs also appear in the main site's log, including work on destinations with their direct server disabled.
 
 **Skills** lists the packages provided by the products active on this site. A site administrator can download a ZIP from **Settings → POM MCP** even before enabling remote access. Extract each skill folder into the AI client's skill directory. A direct MCP connection can call `pom_list_skills` and `pom_get_skill` to read the same manifest and files. Use the manifest revision when fetching individual files. Product skills describe workflows and grant no additional access.
 
@@ -763,7 +763,7 @@ if ( class_exists( Bootstrap::class ) && Bootstrap::API_VERSION === 1 ) {
 }
 ```
 
-The optional third argument is a callable that returns an iterable of `POMFramework\Mcp\Operation` objects. The framework calls it once per request for an enabled server. Each operation takes a unique `pom_*`, `wp_*` or `wc_*` tool name, a label, a description, an effect, a closed JSON Schema object, a permission callback and an execution callback. Both callbacks receive the validated input. Return `true` from the permission callback when the actor can use the operation and a `WP_Error` to deny it with a reason. The execution callback can return a JSON-compatible result or a `WP_Error`.
+The optional third argument is a callable that returns an iterable of `POMFramework\Mcp\Operation` objects. The framework resolves descriptors for the active catalogue and when rendering or saving the site's write permissions. Each operation takes a unique `pom_*`, `wp_*` or `wc_*` tool name, a label, a description, an effect, a closed JSON Schema object, a permission callback and an execution callback. Both callbacks receive the validated input. Return `true` from the permission callback when the actor can use the operation and a `WP_Error` to deny it with a reason. The execution callback can return a JSON-compatible result or a `WP_Error`.
 
 Use `Operation::READ` for operations with no writes or chargeable effects. Use the product's object-level WordPress permissions in the permission callback. The server exposes its own registered abilities over MCP and binds them to an authenticated request on the same site.
 
@@ -773,6 +773,8 @@ Use `Operation::COST` for paid product operations with an authoritative executio
 
 The optional fourth argument to `register_provider()` returns `POMFramework\Mcp\Catalog_Item` descriptors for resources and prompts. Register each resource with its stable `pom://` URI and MIME type. Prompt descriptors declare their string arguments. Give each item a WordPress permission callback because its content can depend on the connected account. Providers that need the grant context can opt in with the `Operation` constructor's ninth argument. Preview and execution callbacks then receive the validated arguments followed by the actor. The tenth argument delegates a read or assigns a write to an established network group. Resources and prompts also require explicit delegation. New descriptors default to site-local.
 
+The eleventh `Operation` argument names the site write permission groups that must all be enabled. An empty list assigns a write or paid operation to its provider ID, which displays as **Allow [product] writes**. The Theme uses `site_content_writes`, `option_writes`, `theme_writes` and `woocommerce_writes`. When a provider dispatches its own nested operations, check `Settings::write_groups_allowed( $groups )` for each nested effect and retain the matching object, actor and network checks.
+
 The built-in `pom_get_site_context` tool returns the site identity, registered product identifiers, multisite status and contract version. Use it to verify the connection and its destination.
 
 After registering a provider, call `Bootstrap::register_skill( $provider_id, $name, $label, $absolute_directory, $files )` to offer a skill through the shared screen and tools. The file list defaults to `SKILL.md`. Include an exact relative allowlist of Markdown, JSON and YAML files when shipping references. The entrypoint declares the matching slug as its YAML `name` and a quoted three-part version under `metadata`. Files must be UTF-8 and limited to 64 KiB each and 512 KiB per package. The skill tools are direct-site reads. POM Theme exposes its authoring skill to eligible delegated connections through `pom_get_authoring_skill`.
@@ -781,7 +783,7 @@ The selected Framework bootstrap keeps its MCP classes together when another act
 
 ### Review a change
 
-On a site with a product that supplies reviewed writes, enable **Allow reviewed changes through OAuth** in **Settings → POM MCP**. Connect using OAuth with `mcp:read` and `mcp:write`. API keys continue to have read access.
+On a site with a product that supplies reviewed writes, enable **Allow reviewed changes through OAuth** in **Settings → POM MCP**. Use **Write permissions** to select the products or families allowed to modify the site. Groups are selected initially and take effect only within an authorized write connection. Connect using OAuth with `mcp:read` and `mcp:write`. API keys continue to have read access. Turning off a group hides its operations from the writable catalogue and blocks jobs that need that group when they run.
 
 1. Call `pom_preview_operation` when you need the current revision. Call `pom_prepare_review` with the exact operation and its arguments. Inspect the review and choose **Approve change** or **Reject change** in WordPress, or use the confirmation form in a compatible MCP client. Set `review_mode` to `web` to require the WordPress form. `pom_get_review` returns the status and receipt.
 2. Call `pom_apply_review` with the approved `review_id`. It returns a task receipt. The background worker checks the original connection, current permissions and the exact preview before applying the operation.
@@ -797,22 +799,22 @@ Site Tweaks can use the shared settings writer for reviewed patch operations. A 
 
 ### Delegate to selected WordPress Multisite destinations
 
-Open **Network Admin → Settings → POM MCP** from the main site. Enable network delegation and list the allowed destination site IDs. Network jobs require a current POM AI Unlimited entitlement and an authorized domain on the main site. Each destination needs an active POM product that provides the requested operation. Worker eligibility can be extended through `pom_mcp_network_worker_available`; check that the supplied destination will bootstrap the relevant product and shared worker. The destination's own POM MCP connection can stay disabled.
+Open **Network Admin → Settings → POM MCP** from the main site. Enable network delegation and list the allowed destination site IDs. Network jobs require a current POM AI Unlimited entitlement and an authorized domain on the main site. Each listed site has **Allow delegation from your multisite network** enabled by default under **Settings → POM MCP**. Clearing it removes the site from delegation. Its **Write permissions** can further restrict the groups allowed by Network Admin. Each destination needs an active POM product that provides the requested operation. Worker eligibility can be extended through `pom_mcp_network_worker_available`; check that the supplied destination will bootstrap the relevant product and shared worker. The destination's own POM MCP connection can stay disabled.
 
 1. On the main site, enable **POM MCP** with OAuth. A network administrator consents to `mcp:read` and `network:sites:read`.
 2. Call `pom_network_list_sites`, follow `next_after_blog_id` when present, choose the intended site, then discover its tools, resources or prompts with `pom_network_discover_site`. Read an item with `pom_network_read_site`.
 3. For changes, also enable **Allow reviewed destination changes** in Network Admin and **Allow reviewed changes through OAuth** on the main site. Select the allowed write groups in Network Admin. Obtain consent for `mcp:write` and `network:sites:write`.
 4. Use `pom_network_execute_site` to prepare a change at the destination. Set `preview_only` to obtain its current revision without creating an approval. Poll the task on the main site. The review link identifies the destination and requires a signed-in decision on the main site. After approval, call `pom_apply_review` and poll the application task there as well.
 
-The destination's normal WordPress cron runs the job with the original actor's current permissions. Changes to the destination, policy or connection can invalidate queued work. A network integration may add a check through `pom_mcp_network_entitlement`, which receives the current decision, destination blog ID and whether the job concerns a write. Preserve an earlier denial and return `true` only to allow the job. The filter runs in the network main site's storage context. Pomatio retains its independent account connections.
+The destination's normal WordPress cron runs the job with the original actor's current permissions. Changes to the destination, policy or connection can invalidate queued work. A network integration may add a check through `pom_mcp_network_entitlement`, which receives the current decision, destination blog ID and whether the job concerns a write. Preserve an earlier denial and return `true` only to allow the job. The filter runs in the network main site's storage context.
 
-### Connect a site to a Pomatio account
+### Connect a site to an external account
 
-On a compatible HTTPS site, enable **Allow Pomatio account connections** in **Settings → POM MCP** with OAuth and pretty permalinks enabled. Enable **Allow reviewed changes through OAuth** if the account needs to request changes. Use My Account to connect that website and complete consent as the intended WordPress user. Each subsite has its own authorization.
+For an external account service that supports POM MCP, enable **Allow external account connections** on the destination under **Settings → POM MCP**. The setting is off initially and requires OAuth and pretty permalinks. Connect the website from the service, then complete consent as the intended WordPress user. Each subsite has its own authorization. This setting applies to account services connecting through the site's HTTPS endpoint. Delegation from the main site of the same WordPress network has separate settings.
 
-Account clients request `mcp:read` and `account:destination`, plus `mcp:write` for reviewed changes. This connection uses the published authoring catalogue and requires a signed-in WordPress decision for every change. Site-local product operations and network delegation use their own connections. When replacing a previous website connection, disconnect it in My Account and authorize a new one.
+Account clients request `mcp:read` and `account:destination`, plus `mcp:write` for reviewed changes. The destination must allow reviewed changes and the relevant write group. External grants use the site's explicitly allowed authoring catalogue. Each change requires a signed-in approval on the destination site. Disable **Allow external account connections** to suspend access through those grants or revoke an individual grant in the destination's MCP settings.
 
-Pomatio’s account origin uses the same endpoint with a dedicated account routing catalogue. Enable the server and OAuth in **Settings → POM MCP** on the account origin. Agent scopes are `mcp:read` and `account:sites:read`, with `mcp:write` and `account:sites:execute` for reviewed destination execution. The destination still requires its own authorization and approval.
+An account service can register a dedicated account routing catalogue on its origin with `AccountGateway::register( $provider_id, $label, $operations, $execute_tools, $consent )` before WordPress `init`. The operation callback returns the gateway provider's descriptors. The optional `$execute_tools` array names tools that require execution consent. The optional `$consent` callback returns the service's consent message as plain text. The origin uses the shared endpoint, displays the supplied label, and requires `mcp:read` and `account:sites:read`, plus `mcp:write` and `account:sites:execute` for execution tools. The service owns account eligibility, website connections and operation routing. The destination retains its own authorization and approval.
 
 ### Run product background jobs
 

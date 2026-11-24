@@ -18,7 +18,38 @@ final class Admin {
 	}
 
 	public function menu(): void {
-		add_options_page( 'POM MCP', 'POM MCP', 'manage_options', self::PAGE, array( $this, 'render' ) );
+		$page = add_options_page( 'POM MCP', 'POM MCP', 'manage_options', self::PAGE, array( $this, 'render' ) );
+		if ( $page ) {
+			add_action( 'admin_enqueue_scripts', static function ( string $hook ) use ( $page ): void {
+				if ( $hook === $page ) { self::styles(); }
+			} );
+		}
+	}
+
+	private static function styles(): void {
+		wp_register_style( 'pom-mcp-admin', false );
+		wp_enqueue_style( 'pom-mcp-admin' );
+		wp_add_inline_style( 'pom-mcp-admin', <<<'CSS'
+.pom-mcp-admin { max-width: 1080px; }
+.pom-mcp-admin .pom-mcp-panel { margin: 16px 0; padding: 20px; border: 1px solid #dcdcde; border-radius: 6px; background: #fff; }
+.pom-mcp-admin .pom-mcp-panel > :first-child { margin-top: 0; }
+.pom-mcp-admin .pom-mcp-panel > :last-child { margin-bottom: 0; }
+.pom-mcp-admin .pom-mcp-connection { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.pom-mcp-admin .pom-mcp-endpoint { display: inline-block; padding: 8px 10px; overflow-wrap: anywhere; }
+.pom-mcp-admin .pom-mcp-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; background: #f0f0f1; color: #1d2327; }
+.pom-mcp-admin .pom-mcp-pill-active { background: #edfaef; color: #135e26; }
+.pom-mcp-admin .pom-mcp-pill-error { background: #fcf0f1; color: #8a2424; }
+.pom-mcp-admin .pom-mcp-products { display: flex; flex-wrap: wrap; gap: 5px; }
+.pom-mcp-admin .pom-mcp-products li { margin: 0; }
+.pom-mcp-admin .pom-mcp-permissions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 6px; }
+.pom-mcp-admin .pom-mcp-permissions label { padding: 9px 10px; border: 1px solid #dcdcde; border-radius: 4px; }
+.pom-mcp-admin .pom-mcp-scroll { overflow-x: auto; }
+.pom-mcp-admin .pom-mcp-log code { overflow-wrap: anywhere; }
+.pom-mcp-admin .pom-mcp-log th:first-child { min-width: 125px; }
+.pom-mcp-admin .pom-mcp-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 782px) { .pom-mcp-admin .pom-mcp-panel { padding: 14px; } }
+CSS
+		);
 	}
 
 	private static function url(): string {
@@ -38,6 +69,7 @@ final class Admin {
 		switch ( $action ) {
 			case 'save':
 				$this->save( $storage );
+				( new Log( $storage ) )->record( 'settings_saved', 'success', self::admin_actor() );
 				break;
 			case 'rotate_key':
 				$this->rotate_key( $storage );
@@ -47,6 +79,7 @@ final class Admin {
 				if ( get_option( Settings::API_KEY, false ) !== false ) {
 					wp_die( esc_html__( 'The API key could not be revoked.', 'pom-framework' ) );
 				}
+				( new Log( $storage ) )->record( 'api_key_revoke', 'success', self::admin_actor() );
 				break;
 			case 'revoke_agent':
 				if ( ! $storage->ready() ) {
@@ -56,7 +89,7 @@ final class Admin {
 				if ( is_wp_error( $result ) ) {
 					wp_die( esc_html( $result->get_error_message() ) );
 				}
-				( new Log( $storage ) )->record( 'oauth_revoke_admin', 'success', array( 'user_id' => get_current_user_id() ) );
+				( new Log( $storage ) )->record( 'oauth_revoke_admin', 'success', self::admin_actor() );
 				break;
 			default:
 				wp_die( esc_html__( 'Unknown POM MCP settings action.', 'pom-framework' ), '', array( 'response' => 400 ) );
@@ -85,10 +118,21 @@ final class Admin {
 	}
 
 	private function save( Storage $storage ): void {
+		$current = Settings::get();
+		$permissions = (array) $current['write_permissions'];
+		$posted = (array) ( $_POST['write_permissions'] ?? array() );
+		foreach ( $this->bootstrap->write_permissions() as $group => $label ) {
+			// The hidden input preserves an unchecked value; missing groups may be inactive.
+			if ( in_array( $posted[ $group ] ?? null, array( '0', '1' ), true ) ) {
+				$permissions[ $group ] = $posted[ $group ] === '1';
+			}
+		}
 		$settings = array(
 			'enabled' => self::field( 'enabled' ) === '1',
 			'oauth' => self::field( 'oauth' ) === '1',
 			'writes' => self::field( 'writes' ) === '1',
+			'write_permissions' => $permissions,
+			'network_destination' => is_multisite() && ! is_main_site() && self::field( 'network_destination' ) !== '' ? self::field( 'network_destination' ) === '1' : (bool) $current['network_destination'],
 			'account_destination' => ! AccountGateway::registered() && self::field( 'account_destination' ) === '1',
 			'api_key' => ! AccountGateway::registered() && self::field( 'api_key' ) === '1',
 			'service_user' => absint( self::field( 'service_user' ) ),
@@ -141,7 +185,7 @@ final class Admin {
 		if ( ! update_option( Settings::API_KEY, $record, false ) ) {
 			wp_die( esc_html__( 'The API key could not be saved.', 'pom-framework' ) );
 		}
-		( new Log( $storage ) )->record( 'api_key_rotate', 'success', array( 'user_id' => get_current_user_id() ) );
+		( new Log( $storage ) )->record( 'api_key_rotate', 'success', self::admin_actor() );
 		RequestPolicy::send_no_store();
 		wp_die(
 			'<p>' . esc_html__( 'Copy this key now. You will only see it once.', 'pom-framework' ) . '</p><p><code>'
@@ -160,8 +204,9 @@ final class Admin {
 		$requirements = $this->bootstrap->requirements();
 		$problem = $this->bootstrap->problem() ?: $requirements;
 		$storage = new Storage();
+		$active = $settings['enabled'] && $problem === '';
 		?>
-		<div class="wrap">
+		<div class="wrap pom-mcp-admin">
 			<h1>POM MCP</h1>
 			<?php if ( isset( $_GET['pom_mcp_saved'] ) && $_GET['pom_mcp_saved'] === '1' ) : ?>
 				<div class="notice notice-success"><p><?php esc_html_e( 'POM MCP settings updated.', 'pom-framework' ); ?></p></div>
@@ -169,20 +214,30 @@ final class Admin {
 			<?php if ( $problem !== '' ) : ?>
 				<div class="notice notice-warning"><p><?php echo esc_html( $problem ); ?></p></div>
 			<?php endif; ?>
-			<h2><?php esc_html_e( 'Connection', 'pom-framework' ); ?></h2>
-			<p><?php echo esc_html( sprintf( __( 'Connection controller: %s', 'pom-framework' ), AccountGateway::registered() ? 'Pomatio Account' : 'POM Framework' ) ); ?></p>
-			<p><code><?php echo esc_html( Settings::endpoint() ); ?></code></p>
-			<h2><?php esc_html_e( 'Products', 'pom-framework' ); ?></h2>
-			<ul class="ul-disc">
-				<?php foreach ( $this->bootstrap->providers() as $label ) : ?>
-					<li><?php echo esc_html( $label ); ?></li>
-				<?php endforeach; ?>
-			</ul>
-			<?php $this->render_settings( $settings, $requirements ); ?>
-			<?php $this->render_skills(); ?>
+			<section class="pom-mcp-panel" aria-labelledby="pom-mcp-connection-heading">
+				<div class="pom-mcp-connection">
+					<h2 id="pom-mcp-connection-heading"><?php esc_html_e( 'Connection', 'pom-framework' ); ?></h2>
+					<span class="pom-mcp-pill <?php echo $active ? 'pom-mcp-pill-active' : ''; ?>"><?php echo $active ? esc_html__( 'Enabled', 'pom-framework' ) : esc_html__( 'Inactive', 'pom-framework' ); ?></span>
+				</div>
+				<p><?php echo esc_html( sprintf( __( 'Connection controller: %s', 'pom-framework' ), AccountGateway::label() ?: 'POM Framework' ) ); ?></p>
+				<p><code class="pom-mcp-endpoint"><?php echo esc_html( Settings::endpoint() ); ?></code></p>
+				<ul class="pom-mcp-products" aria-label="<?php esc_attr_e( 'Active MCP products', 'pom-framework' ); ?>">
+					<?php foreach ( $this->bootstrap->providers() as $label ) : ?>
+						<li class="pom-mcp-pill"><?php echo esc_html( $label ); ?></li>
+					<?php endforeach; ?>
+				</ul>
+			</section>
+			<section class="pom-mcp-panel" aria-labelledby="pom-mcp-settings-heading">
+				<h2 id="pom-mcp-settings-heading"><?php esc_html_e( 'Settings', 'pom-framework' ); ?></h2>
+				<?php $this->render_settings( $settings, $requirements ); ?>
+			</section>
+			<?php $this->render_activity( $storage ); ?>
 			<?php if ( $storage->ready() ) : ?>
-				<?php $this->render_connections( $settings, $storage ); ?>
+				<section class="pom-mcp-panel" aria-labelledby="pom-mcp-credentials-heading">
+					<?php $this->render_connections( $settings, $storage ); ?>
+				</section>
 			<?php endif; ?>
+			<?php $this->render_skills(); ?>
 		</div>
 		<?php
 	}
@@ -191,7 +246,8 @@ final class Admin {
 		$skills = $this->bootstrap->skills();
 		if ( ! $skills ) { return; }
 		?>
-		<h2><?php esc_html_e( 'Skills', 'pom-framework' ); ?></h2>
+		<section class="pom-mcp-panel" aria-labelledby="pom-mcp-skills-heading">
+		<h2 id="pom-mcp-skills-heading"><?php esc_html_e( 'Skills', 'pom-framework' ); ?></h2>
 		<p><?php esc_html_e( 'Download a ZIP to install a skill in your AI client, or ask a connected agent to read it with pom_list_skills and pom_get_skill.', 'pom-framework' ); ?></p>
 		<table class="widefat striped">
 			<thead><tr><th scope="col"><?php esc_html_e( 'Skill', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'Download', 'pom-framework' ); ?></th></tr></thead>
@@ -210,11 +266,13 @@ final class Admin {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		</section>
 		<?php
 	}
 
 	private function render_settings( array $settings, string $requirements ): void {
 		$gateway = AccountGateway::registered();
+		$permissions = $this->bootstrap->write_permissions();
 		?>
 		<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
 			<?php self::form_fields( 'save' ); ?>
@@ -237,10 +295,34 @@ final class Admin {
 					<th scope="row"><?php esc_html_e( 'Reviewed changes', 'pom-framework' ); ?></th>
 					<td><label><input type="checkbox" name="writes" value="1" <?php checked( $settings['writes'] ); ?>> <?php esc_html_e( 'Allow reviewed changes through OAuth', 'pom-framework' ); ?></label><p class="description"><?php echo esc_html( $gateway ? __( 'Each change requires authorization and approval on its destination website.', 'pom-framework' ) : __( 'Each change requires approval and the connected account’s current WordPress permissions.', 'pom-framework' ) ); ?></p></td>
 				</tr>
+				<?php if ( $permissions ) : ?>
+				<tr>
+					<th scope="row" id="pom-mcp-permissions-heading"><?php esc_html_e( 'Write permissions', 'pom-framework' ); ?></th>
+					<td>
+						<fieldset class="pom-mcp-permissions" aria-labelledby="pom-mcp-permissions-heading" aria-describedby="pom-mcp-permissions-description">
+							<?php foreach ( $permissions as $group => $label ) : ?>
+								<input type="hidden" name="write_permissions[<?php echo esc_attr( $group ); ?>]" value="0">
+								<label><input type="checkbox" name="write_permissions[<?php echo esc_attr( $group ); ?>]" value="1" <?php checked( Settings::write_groups_allowed( array( $group ) ) ); ?>> <?php echo esc_html( $label ); ?></label>
+							<?php endforeach; ?>
+						</fieldset>
+						<p id="pom-mcp-permissions-description" class="description"><?php esc_html_e( 'Applies to MCP writes to this site, including delegated writes. Direct changes also require reviewed changes to be enabled above.', 'pom-framework' ); ?></p>
+					</td>
+				</tr>
+				<?php endif; ?>
+				<?php if ( is_multisite() && ! is_main_site() && ! $gateway ) : ?>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Multisite delegation', 'pom-framework' ); ?></th>
+					<td>
+						<input type="hidden" name="network_destination" value="0">
+						<label><input type="checkbox" name="network_destination" value="1" <?php checked( $settings['network_destination'] ); ?>> <?php esc_html_e( 'Allow delegation from your multisite network', 'pom-framework' ); ?></label>
+						<p class="description"><?php esc_html_e( 'Applies when the network administrator has enabled delegation and listed this site. You can keep this site’s direct MCP endpoint inactive.', 'pom-framework' ); ?></p>
+					</td>
+				</tr>
+				<?php endif; ?>
 				<?php if ( ! $gateway ) : ?>
 				<tr>
-					<th scope="row"><?php esc_html_e( 'Account connections', 'pom-framework' ); ?></th>
-					<td><label><input type="checkbox" name="account_destination" value="1" <?php checked( $settings['account_destination'] ); ?>> <?php esc_html_e( 'Allow Pomatio account connections', 'pom-framework' ); ?></label><p class="description"><?php esc_html_e( 'Requires OAuth and authorization by a WordPress user. Account connections use the site’s reviewed authoring tools.', 'pom-framework' ); ?></p></td>
+					<th scope="row"><?php esc_html_e( 'External account connections', 'pom-framework' ); ?></th>
+					<td><label><input type="checkbox" name="account_destination" value="1" <?php checked( $settings['account_destination'] ); ?>> <?php esc_html_e( 'Allow external account connections', 'pom-framework' ); ?></label><p class="description"><?php esc_html_e( 'Lets an external account service connect this website with consent from its WordPress user. Uses this site’s direct MCP endpoint and OAuth.', 'pom-framework' ); ?></p></td>
 				</tr>
 				<tr>
 					<th scope="row"><label for="pom-mcp-service-user"><?php esc_html_e( 'API key service user ID', 'pom-framework' ); ?></label></th>
@@ -269,7 +351,7 @@ final class Admin {
 		$after = isset( $_GET['agent_after'] ) && is_string( $_GET['agent_after'] ) ? absint( $_GET['agent_after'] ) : 0;
 		$clients = ( new TokenStore( $storage ) )->authorized_clients( $after );
 		?>
-		<h2><?php esc_html_e( 'Credentials', 'pom-framework' ); ?></h2>
+		<h2 id="pom-mcp-credentials-heading"><?php esc_html_e( 'Credentials', 'pom-framework' ); ?></h2>
 		<?php if ( ! empty( $key['last4'] ) ) : ?>
 			<p><?php echo esc_html( sprintf( __( 'API key ending in %s', 'pom-framework' ), $key['last4'] ) ); ?></p>
 		<?php endif; ?>
@@ -298,13 +380,61 @@ final class Admin {
 		<?php else : ?>
 			<p><?php esc_html_e( 'There are no OAuth connections for your account.', 'pom-framework' ); ?></p>
 		<?php endif; ?>
-		<h2><?php esc_html_e( 'Recent activity', 'pom-framework' ); ?></h2>
-		<ul>
-			<?php foreach ( ( new Log( $storage ) )->recent() as $entry ) : ?>
-				<li><?php echo esc_html( implode( ' · ', array( $entry['timestamp'] . ' UTC', $entry['auth_type'], $entry['action'], $entry['status'] ) ) ); ?></li>
-			<?php endforeach; ?>
-		</ul>
 		<?php
+	}
+
+	private function render_activity( Storage $storage ): void {
+		$before = isset( $_GET['activity_before'] ) && is_string( $_GET['activity_before'] ) ? absint( $_GET['activity_before'] ) : 0;
+		$ready = $storage->ready();
+		$entries = $ready ? ( new Log( $storage ) )->recent( $before ) : array();
+		$more = count( $entries ) > 30;
+		if ( $more ) { array_pop( $entries ); }
+		$statuses = array(
+			'success' => __( 'Success', 'pom-framework' ),
+			'error' => __( 'Error', 'pom-framework' ),
+			'denied' => __( 'Denied', 'pom-framework' ),
+			'approved' => __( 'Approved', 'pom-framework' ),
+			'rejected' => __( 'Rejected', 'pom-framework' ),
+		);
+		?>
+		<section id="pom-mcp-activity" class="pom-mcp-panel" aria-labelledby="pom-mcp-activity-heading">
+			<h2 id="pom-mcp-activity-heading"><?php esc_html_e( 'Recent activity', 'pom-framework' ); ?></h2>
+			<p class="description"><?php esc_html_e( 'Shows MCP actions, review decisions and outcomes for the last 30 days. Times are shown in this site’s time zone.', 'pom-framework' ); ?></p>
+			<?php if ( ! $ready ) : ?>
+				<p><?php esc_html_e( 'Activity collection starts when you enable POM MCP. For a delegated-only site, check POM MCP on the network’s main site.', 'pom-framework' ); ?></p>
+			<?php elseif ( ! $entries ) : ?>
+				<p><?php esc_html_e( 'There is no activity on this page yet.', 'pom-framework' ); ?></p>
+			<?php else : ?>
+				<div class="pom-mcp-scroll" role="region" aria-labelledby="pom-mcp-activity-heading" tabindex="0">
+					<table class="widefat striped pom-mcp-log">
+						<thead><tr><th scope="col"><?php esc_html_e( 'Time', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'User ID', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'Authentication', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'Action', 'pom-framework' ); ?></th><th scope="col"><?php esc_html_e( 'Result', 'pom-framework' ); ?></th></tr></thead>
+						<tbody>
+						<?php foreach ( $entries as $entry ) : ?>
+							<?php $status = $entry['status']; $badge = in_array( $status, array( 'success', 'approved' ), true ) ? 'pom-mcp-pill-active' : 'pom-mcp-pill-error'; ?>
+							<tr>
+								<td><?php echo esc_html( get_date_from_gmt( $entry['timestamp'], get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) ) ); ?></td>
+								<td><?php echo esc_html( $entry['actor_user_id'] ?: '—' ); ?></td>
+								<td><?php echo esc_html( $entry['auth_type'] ); ?></td>
+								<td><code><?php echo esc_html( $entry['action'] ); ?></code></td>
+								<td><span class="pom-mcp-pill <?php echo esc_attr( $badge ); ?>"><?php echo esc_html( $statuses[ $status ] ?? $status ); ?></span></td>
+							</tr>
+						<?php endforeach; ?>
+						</tbody>
+					</table>
+				</div>
+			<?php endif; ?>
+			<?php if ( $before || $more ) : ?>
+				<p class="pom-mcp-actions">
+					<?php if ( $before ) : ?><a class="button" href="<?php echo esc_url( self::url() . '#pom-mcp-activity' ); ?>"><?php esc_html_e( 'Latest activity', 'pom-framework' ); ?></a><?php endif; ?>
+					<?php if ( $more ) : ?><a class="button" href="<?php echo esc_url( add_query_arg( 'activity_before', end( $entries )['id'], self::url() ) . '#pom-mcp-activity' ); ?>"><?php esc_html_e( 'Older activity', 'pom-framework' ); ?></a><?php endif; ?>
+				</p>
+			<?php endif; ?>
+		</section>
+		<?php
+	}
+
+	private static function admin_actor(): array {
+		return array( 'auth_type' => 'wordpress', 'user_id' => get_current_user_id() );
 	}
 
 	private function button( string $action, string $label, string $client = '' ): void {

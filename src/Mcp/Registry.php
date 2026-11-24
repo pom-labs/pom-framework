@@ -18,7 +18,8 @@ final class Registry {
 	}
 
 	private function active_providers(): array {
-		return AccountGateway::registered() ? array_intersect_key( $this->providers, array( AccountGateway::PROVIDER => true ) ) : $this->providers;
+		$gateway = AccountGateway::provider();
+		return $gateway !== '' ? array_intersect_key( $this->providers, array( $gateway => true ) ) : $this->providers;
 	}
 
 	public function register_skill( string $provider, SkillPackage $skill ): void {
@@ -54,7 +55,7 @@ final class Registry {
 		$names = array_fill_keys( array_merge( array_keys( $operations ), Reviews::TOOL_NAMES ), true );
 		$providers = $this->active_providers();
 		ksort( $providers );
-		foreach ( $providers as $provider ) {
+		foreach ( $providers as $id => $provider ) {
 			$descriptors = $provider['operations'] === null ? array() : ( $provider['operations'] )();
 			if ( ! is_iterable( $descriptors ) ) {
 				throw new \UnexpectedValueException( 'A POM MCP provider must return operation descriptors.' );
@@ -66,6 +67,10 @@ final class Registry {
 				}
 				$names[ $operation->name ] = true;
 				if ( $operation->effect === Operation::READ || ( in_array( $operation->effect, array( Operation::WRITE, Operation::COST ), true ) && $operation->preview !== null ) ) {
+					if ( $operation->effect !== Operation::READ && ! $operation->write_groups ) {
+						$operation = clone $operation;
+						$operation->write_groups = array( $id );
+					}
 					$operations[ $operation->name ] = $operation;
 				}
 			}

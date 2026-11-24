@@ -37,12 +37,13 @@ final class Reviews {
 	public function tools(): array {
 		$id = array( 'type' => 'string', 'format' => 'uuid' );
 		$read = array( 'review_id' => $id );
+		$available = array_keys( array_filter( $this->operations, static fn( Operation $operation ): bool => $operation->allows_site_writes() ) );
 		$tools = array(
 			'pom_preview_operation' => array( 'Preview a change', 'Read the exact proposed change and the current revision without opening a review.',
-				array( 'operation' => array( 'type' => 'string', 'enum' => array_keys( $this->operations ) ), 'arguments' => array( 'type' => 'object' ) ),
+				array( 'operation' => array( 'type' => 'string', 'enum' => $available ), 'arguments' => array( 'type' => 'object' ) ),
 				array( 'operation', 'arguments' ), array( $this, 'inspect_operation' ) ),
 			'pom_prepare_review' => array( 'Prepare a write review', 'Preview an available operation and request exact approval. Approval does not apply the operation.',
-				array( 'operation' => array( 'type' => 'string', 'enum' => array_keys( $this->operations ) ), 'arguments' => array( 'type' => 'object' ),
+				array( 'operation' => array( 'type' => 'string', 'enum' => $available ), 'arguments' => array( 'type' => 'object' ),
 					'review_mode' => array( 'type' => 'string', 'enum' => array( 'auto', 'web' ), 'description' => 'Use web to require a signed-in WordPress decision.' ) ),
 				array( 'operation', 'arguments' ), array( $this, 'prepare' ) ),
 			'pom_get_review' => array( 'Get a write review', 'Get the status and receipt of a review requested by this connection.', $read, array( 'review_id' ), array( $this, 'inspect' ) ),
@@ -50,7 +51,7 @@ final class Reviews {
 				array( 'review_id' ), array( $this, 'enqueue' ) ),
 		);
 		$operations = array( 'pom_get_task' => self::task_tool() );
-		if ( ! $this->operations ) { unset( $tools['pom_preview_operation'], $tools['pom_prepare_review'] ); }
+		if ( ! $available ) { unset( $tools['pom_preview_operation'], $tools['pom_prepare_review'] ); }
 		foreach ( $tools as $name => [ $label, $description, $properties, $required, $execute ] ) {
 			$operations[ $name ] = new Operation( $name, $label, $description, Operation::READ,
 				array( 'type' => 'object', 'additionalProperties' => false, 'properties' => $properties, 'required' => $required ), '__return_true', $execute );
@@ -79,7 +80,11 @@ final class Reviews {
 	}
 
 	private function allows_record( array $record, array $actor ): bool {
-		return ! isset( $record['network'] ) || ( $this->network && $this->network->review_allowed( $record, $actor ) );
+		if ( isset( $record['network'] ) ) {
+			return $this->network && $this->network->review_allowed( $record, $actor );
+		}
+		$operation = $this->operations[ $record['entries'][0]['tool'] ?? '' ] ?? null;
+		return $operation && $operation->allows_site_writes() && ( ! AccountDestination::actor( $actor ) || AccountDestination::allows( $operation ) );
 	}
 
 	public function authorizes( array $actor ): bool {
@@ -90,7 +95,7 @@ final class Reviews {
 	public function account_operations(): array {
 		$result = array();
 		foreach ( $this->operations as $operation ) {
-			if ( AccountDestination::allows( $operation ) ) {
+			if ( $operation->allows_site_writes() && AccountDestination::allows( $operation ) ) {
 				$result[] = array( 'name' => $operation->name, 'description' => $operation->description, 'inputSchema' => $operation->schema );
 			}
 		}
@@ -124,8 +129,10 @@ final class Reviews {
 	/** Only a response to an outstanding human confirmation can use this path. */
 	public function client_decide( string $id, array $actor, string $decision ) {
 		$record = $this->store->load( $id );
-		if ( ! $this->owns( $record[0], $actor ) || ! $this->authorizes( $this->tokens->resume( self::reference( $actor ) ) ) ) { return $this->unavailable(); }
-		return $this->store->decide( $record, $decision, 'mcp_client' );
+		if ( ! $this->owns( $record[0], $actor ) || ! $this->authorizes( $this->tokens->resume( self::reference( $actor ) ) ) || ! $this->allows_record( $record[0], $actor ) ) { return $this->unavailable(); }
+		$result = $this->store->decide( $record, $decision, 'mcp_client' );
+		$this->log_decision( $decision, $result, $actor );
+		return $result;
 	}
 
 	public function enqueue( array $input, array $actor ) {
@@ -137,6 +144,7 @@ final class Reviews {
 			$existing = Queue::status( $task, $record['owner'] );
 			return is_wp_error( $existing ) ? $this->unavailable() : $existing;
 		}
+		if ( ! $this->allows_record( $record, $actor ) ) { return $this->unavailable(); }
 		if ( isset( $record['network'] ) ) {
 			return $this->network ? $this->network->enqueue_review( $id, $record, $actor ) : $this->unavailable();
 		}
@@ -146,6 +154,12 @@ final class Reviews {
 	}
 
 	public function execute_task( array $payload, array $row ) {
+		$result = $this->run_task( $payload, $row );
+		( new Log( new Storage() ) )->record( 'review_execution', is_wp_error( $result ) ? 'error' : 'success', array( 'auth_type' => 'oauth', 'user_id' => (int) ( $payload['connection']['user_id'] ?? 0 ) ) );
+		return $result;
+	}
+
+	private function run_task( array $payload, array $row ) {
 		if ( ! Queue::running() || ( $payload['site'] ?? '' ) !== Settings::identity() || ( $payload['issuer'] ?? '' ) !== Settings::issuer()
 			|| (int) $row['origin_blog'] !== get_current_blog_id() || ! is_array( $payload['connection'] ?? null ) || ! is_string( $payload['review'] ?? null ) ) { return $this->unavailable(); }
 		$reference = $payload['connection'];
@@ -165,11 +179,17 @@ final class Reviews {
 			if ( ! $this->authorizes( $this->tokens->resume( $reference ) ) ) { return $this->unavailable(); }
 			$permission = ( $operation->permission )( $entry['arguments'] );
 			if ( $permission !== true ) { return is_wp_error( $permission ) ? $permission : $this->unavailable(); }
-			return $this->store->apply( $stored, $operation->name, $entry['arguments'], $preview, $operation->uses_actor ? fn( array $args ) => ( $operation->execute )( $args, $actor ) : $operation->execute, fn() => $this->unavailable() );
+			return $this->store->apply( $stored, $operation->name, $entry['arguments'], $preview, function ( array $args ) use ( $operation, $actor ) {
+				if ( ! $operation->allows_site_writes() ) { return $this->unavailable(); }
+				return $operation->uses_actor ? ( $operation->execute )( $args, $actor ) : ( $operation->execute )( $args );
+			}, fn() => $this->unavailable() );
 		} finally { wp_set_current_user( $previous ); }
 	}
 
 	public static function preview_operation( Operation $operation, array $args, array $actor, bool $require_revision = true ) {
+		if ( ! $operation->allows_site_writes() ) {
+			return new WP_Error( 'pom_mcp_write_permission', 'This operation is disabled in the site’s MCP write permissions.', array( 'status' => 403 ) );
+		}
 		$valid = rest_validate_value_from_schema( $args, $operation->schema, 'arguments' );
 		if ( is_wp_error( $valid ) ) { return $valid; }
 		// WordPress accepts string booleans. A reviewed value must retain its actual JSON type.
@@ -218,6 +238,7 @@ final class Reviews {
 			check_admin_referer( $nonce );
 			$decision = isset( $_POST['decision'] ) && is_string( $_POST['decision'] ) ? wp_unslash( $_POST['decision'] ) : '';
 			$result = $this->store->decide( $stored, $decision, 'wordpress' );
+			$this->log_decision( $decision, $result, array( 'auth_type' => 'wordpress', 'user_id' => get_current_user_id() ) );
 			if ( is_wp_error( $result ) ) { wp_die( esc_html( $result->get_error_message() ), '', array( 'response' => 409 ) ); }
 			wp_safe_redirect( self::url( $id ), 303 );
 			exit;
@@ -238,6 +259,11 @@ final class Reviews {
 		<?php endif; ?>
 		<?php
 		wp_die( ob_get_clean(), esc_html( $record['tool'] ), array( 'response' => 200 ) );
+	}
+
+	private function log_decision( string $decision, $result, array $actor ): void {
+		$status = is_wp_error( $result ) || ! in_array( $decision, array( 'approved', 'rejected' ), true ) ? 'error' : $decision;
+		( new Log( new Storage() ) )->record( 'review_decision', $status, $actor );
 	}
 
 	public static function describe( string $id, array $record ): array {

@@ -2,7 +2,7 @@
 
 namespace POMFramework\Mcp;
 
-/** Keep account consent narrower than a direct connection to the same site. */
+/** Apply the shared site authoring profile to credentials issued to an external account. */
 final class AccountDestination {
 	public const VERSION = 1;
 	public const SCOPE = 'account:destination';
@@ -16,7 +16,7 @@ final class AccountDestination {
 		return ( $actor['auth_type'] ?? '' ) === 'oauth' && in_array( self::SCOPE, $actor['scopes'] ?? array(), true );
 	}
 
-	/** Keep remote routing limited to reviewed website authoring families. */
+	/** Approve website authoring capabilities explicitly so newly added tools stay site-local by default. */
 	public static function allows_name( string $name ): bool {
 		$groups = array(
 			'wp_' => 'get_posts get_post create_post update_post delete_post count_posts get_post_types get_pages get_page create_page update_page delete_page get_media get_media_item upload_media_from_url upload_media set_featured_image update_media delete_media count_media get_categories get_tags get_taxonomies get_terms get_term rename_terms reorder_terms create_term update_term delete_term add_post_terms count_terms get_term_meta update_term_meta delete_term_meta get_comments get_pending_comments create_comment delete_comment approve_comment spam_comment trash_comment get_post_meta update_post_meta delete_post_meta get_site_info search get_option update_option get_menus get_menu_items create_menu_item update_menu_item delete_menu_item reorder_menu_items get_seo_meta update_seo_meta get_menu_locations create_menu assign_menu_location get_site_pages set_site_pages',

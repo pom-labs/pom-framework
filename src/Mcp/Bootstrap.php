@@ -65,6 +65,35 @@ final class Bootstrap {
 		return $this->registry->providers();
 	}
 
+	/** Display the site write groups declared by its current providers. */
+	public function write_permissions(): array {
+		$labels = array(
+			'site_content_writes' => __( 'Allow content writes', 'pom-framework' ),
+			'option_writes' => __( 'Allow option writes', 'pom-framework' ),
+			'theme_writes' => __( 'Allow POM Theme writes', 'pom-framework' ),
+			'woocommerce_writes' => __( 'Allow WooCommerce catalog writes', 'pom-framework' ),
+		);
+		foreach ( $this->providers() as $id => $label ) {
+			/* translators: %s: product name. */
+			$labels[ $id ] = sprintf( __( 'Allow %s writes', 'pom-framework' ), $label );
+		}
+		$groups = array();
+		try {
+			foreach ( $this->operations() as $operation ) {
+				if ( $operation->effect !== Operation::READ ) {
+					$groups = array_merge( $groups, $operation->write_groups );
+				}
+			}
+		} catch ( \Throwable $error ) {
+			return array();
+		}
+		foreach ( array_diff( $groups, array_keys( $labels ) ) as $group ) {
+			/* translators: %s: name of an additional write permission group. */
+			$labels[ $group ] = sprintf( __( 'Allow %s writes', 'pom-framework' ), str_replace( array( '-', '_' ), ' ', $group ) );
+		}
+		return array_intersect_key( $labels, array_flip( $groups ) );
+	}
+
 	/** @return array<string,SkillPackage> */
 	public function skills(): array {
 		return $this->registry->skills();
