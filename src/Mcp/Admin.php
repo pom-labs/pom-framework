@@ -18,7 +18,9 @@ final class Admin {
 	}
 
 	public function menu(): void {
-		$page = add_options_page( 'POM MCP', 'POM MCP', 'manage_options', self::PAGE, array( $this, 'render' ) );
+		if ( ! Settings::can_manage_site_mcp() ) { return; }
+		$capability = current_user_can( 'manage_options' ) ? 'manage_options' : Settings::MANAGE_CAPABILITY;
+		$page = add_options_page( 'POM MCP', 'POM MCP', $capability, self::PAGE, array( $this, 'render' ) );
 		if ( $page ) {
 			add_action( 'admin_enqueue_scripts', static function ( string $hook ) use ( $page ): void {
 				if ( $hook === $page ) { self::styles(); }
@@ -57,7 +59,7 @@ CSS
 	}
 
 	public function handle(): void {
-		if ( ! current_user_can( 'manage_options' ) || ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'POST' ) {
+		if ( ! Settings::can_manage_site_mcp() || ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'POST' ) {
 			wp_die( esc_html__( 'You cannot change POM MCP settings on this site.', 'pom-framework' ), '', array( 'response' => 403 ) );
 		}
 		check_admin_referer( self::ACTION );
@@ -119,6 +121,7 @@ CSS
 
 	private function save( Storage $storage ): void {
 		$current = Settings::get();
+		$administrator = current_user_can( 'manage_options' );
 		$permissions = (array) $current['write_permissions'];
 		$posted = (array) ( $_POST['write_permissions'] ?? array() );
 		foreach ( $this->bootstrap->write_permissions() as $group => $label ) {
@@ -135,7 +138,7 @@ CSS
 			'network_destination' => is_multisite() && ! is_main_site() && self::field( 'network_destination' ) !== '' ? self::field( 'network_destination' ) === '1' : (bool) $current['network_destination'],
 			'account_destination' => ! AccountGateway::registered() && self::field( 'account_destination' ) === '1',
 			'api_key' => ! AccountGateway::registered() && self::field( 'api_key' ) === '1',
-			'service_user' => absint( self::field( 'service_user' ) ),
+			'service_user' => $administrator ? absint( self::field( 'service_user' ) ) : (int) $current['service_user'],
 			'rate_limit' => max( 1, min( 600, absint( self::field( 'rate_limit' ) ) ) ),
 			'origins' => array(),
 		);
@@ -149,7 +152,10 @@ CSS
 			$settings['origins'][] = $canonical;
 		}
 		$settings['origins'] = array_values( array_unique( $settings['origins'] ) );
-		if ( $settings['api_key'] && ! Settings::actor_can_connect( $settings['service_user'] ) ) {
+		$service_user = $administrator ? $settings['service_user'] : get_current_user_id();
+		$key = get_option( Settings::API_KEY, array() );
+		$valid_existing = $service_user === 0 && is_array( $key ) && Settings::api_key_user( $key, $settings ) > 0;
+		if ( $settings['api_key'] && ! $valid_existing && ! Settings::actor_can_connect( $service_user ) ) {
 			wp_die( esc_html__( 'Choose an existing service user with access to this site.', 'pom-framework' ), '', array( 'response' => 400 ) );
 		}
 		if ( $settings['enabled'] ) {
@@ -176,12 +182,14 @@ CSS
 
 	private function rotate_key( Storage $storage ): void {
 		$settings = Settings::get();
-		$user_id = (int) $settings['service_user'];
+		$owner_bound = ! current_user_can( 'manage_options' );
+		$user_id = $owner_bound ? get_current_user_id() : (int) $settings['service_user'];
 		if ( ! $settings['enabled'] || ! $settings['api_key'] || ! $storage->ready() || ! Settings::actor_can_connect( $user_id ) ) {
 			wp_die( esc_html__( 'Enable API key access and save a valid service user first.', 'pom-framework' ), '', array( 'response' => 400 ) );
 		}
 		$key = Pkce::random_token( 'pommcp_key_' );
 		$record = array( 'hash' => Server::api_key_hash( $key ), 'last4' => substr( $key, -4 ), 'user' => $user_id );
+		if ( $owner_bound ) { $record['owner_bound'] = true; }
 		if ( ! update_option( Settings::API_KEY, $record, false ) ) {
 			wp_die( esc_html__( 'The API key could not be saved.', 'pom-framework' ) );
 		}
@@ -197,7 +205,7 @@ CSS
 	}
 
 	public function render(): void {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! Settings::can_manage_site_mcp() ) {
 			wp_die( esc_html__( 'You cannot manage POM MCP on this site.', 'pom-framework' ), '', array( 'response' => 403 ) );
 		}
 		$settings = Settings::get();
@@ -325,8 +333,13 @@ CSS
 					<td><label><input type="checkbox" name="account_destination" value="1" <?php checked( $settings['account_destination'] ); ?>> <?php esc_html_e( 'Allow external account connections', 'pom-framework' ); ?></label><p class="description"><?php esc_html_e( 'Lets an external account service connect this website with consent from its WordPress user. Uses this site’s direct MCP endpoint and OAuth.', 'pom-framework' ); ?></p></td>
 				</tr>
 				<tr>
-					<th scope="row"><label for="pom-mcp-service-user"><?php esc_html_e( 'API key service user ID', 'pom-framework' ); ?></label></th>
-					<td><input id="pom-mcp-service-user" name="service_user" type="number" min="0" value="<?php echo esc_attr( (string) $settings['service_user'] ); ?>"></td>
+					<?php if ( current_user_can( 'manage_options' ) ) : ?>
+						<th scope="row"><label for="pom-mcp-service-user"><?php esc_html_e( 'API key service user ID', 'pom-framework' ); ?></label></th>
+						<td><input id="pom-mcp-service-user" name="service_user" type="number" min="0" value="<?php echo esc_attr( (string) $settings['service_user'] ); ?>"><p class="description"><?php esc_html_e( 'Used when an administrator generates or rotates the key.', 'pom-framework' ); ?></p></td>
+					<?php else : ?>
+						<th scope="row"><?php esc_html_e( 'API key identity', 'pom-framework' ); ?></th>
+						<td><?php esc_html_e( 'A new or rotated key grants read access as your own WordPress account and replaces the current site key.', 'pom-framework' ); ?></td>
+					<?php endif; ?>
 				</tr>
 				<?php endif; ?>
 				<tr>

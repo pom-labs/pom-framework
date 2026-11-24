@@ -13,6 +13,7 @@ final class Settings {
 	public const API_KEY_HEADER = 'X-POM-MCP-API-Key';
 	public const READ_SCOPE = 'mcp:read';
 	public const WRITE_SCOPE = 'mcp:write';
+	public const MANAGE_CAPABILITY = 'pom_manage_mcp';
 
 	public static function get(): array {
 		$value = get_option( self::OPTION, array() );
@@ -89,6 +90,21 @@ final class Settings {
 
 	public static function actor_can_connect( int $user ): bool {
 		return $user > 0 && ( ! is_multisite() || is_user_member_of_blog( $user ) ) && user_can( $user, 'read' );
+	}
+
+	/** The account controller keeps its own administration policy. */
+	public static function can_manage_site_mcp(): bool {
+		return current_user_can( 'manage_options' ) || ( ! AccountGateway::registered() && current_user_can( self::MANAGE_CAPABILITY ) );
+	}
+
+	/** A delegated key stays confined to its issuing site role, even if that user is promoted or loses access. */
+	public static function api_key_user( array $record, array $settings ): int {
+		$user_id = (int) ( $record['user'] ?? 0 );
+		if ( ! self::actor_can_connect( $user_id ) ) { return 0; }
+		if ( ( $record['owner_bound'] ?? false ) === true ) {
+			return ! AccountGateway::registered() && user_can( $user_id, self::MANAGE_CAPABILITY ) && ! user_can( $user_id, 'manage_options' ) ? $user_id : 0;
+		}
+		return $user_id === (int) $settings['service_user'] ? $user_id : 0;
 	}
 
 	public static function identity(): string {

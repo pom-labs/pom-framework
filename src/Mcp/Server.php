@@ -276,10 +276,8 @@ final class Server {
 		if ( $api_key !== '' && preg_match( '/^pommcp_key_[A-Za-z0-9_-]{43}$/D', $api_key ) ) {
 			$settings = Settings::get();
 			$key = get_option( Settings::API_KEY, array() );
-			$user_id = (int) $settings['service_user'];
-			if ( $settings['api_key'] && is_array( $key ) && (int) ( $key['user'] ?? 0 ) === $user_id
-				&& hash_equals( (string) ( $key['hash'] ?? '' ), self::api_key_hash( $api_key ) )
-				&& Settings::actor_can_connect( $user_id ) ) {
+			if ( $settings['api_key'] && is_array( $key ) && hash_equals( (string) ( $key['hash'] ?? '' ), self::api_key_hash( $api_key ) )
+				&& ( $user_id = Settings::api_key_user( $key, $settings ) ) > 0 ) {
 				return array( 'user_id' => $user_id, 'auth_type' => 'api_key', 'rate_key' => 'api_key:' . $user_id );
 			}
 		}
